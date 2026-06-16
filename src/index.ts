@@ -1,7 +1,6 @@
 import "source-map-support/register"; // registering node-source-map-support for typescript stack traces
 import "./lib/definitions"; // must be loaded before Characteristic and Service class
 import createDebug from "debug";
-import { readFileSync } from "node:fs";
 
 /**
  * @group Utils
@@ -42,7 +41,8 @@ const debug = createDebug("HAP-NodeJS:Advertiser");
  * @group Utils
  */
 export function HAPLibraryVersion(): string {
-  const packageJson = JSON.parse(readFileSync(require.resolve("../package.json"), "utf-8"));
+  // eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-require-imports
+  const packageJson = require("../package.json");
   const { version } = packageJson;
   return version;
 }

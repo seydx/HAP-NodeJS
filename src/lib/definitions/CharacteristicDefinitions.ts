@@ -1,5 +1,5 @@
 // THIS FILE IS AUTO-GENERATED - DO NOT MODIFY
-// V=880
+// V=888
 
 import { Access, Characteristic, Formats, Perms, Units } from "../Characteristic";
 
@@ -700,6 +700,23 @@ export class ConfiguredName extends Characteristic {
 Characteristic.ConfiguredName = ConfiguredName;
 
 /**
+ * Characteristic "Connection Health Monitor"
+ */
+export class ConnectionHealthMonitor extends Characteristic {
+
+  public static readonly UUID: string = "00000273-0000-1000-8000-0026BB765291";
+
+  constructor() {
+    super("Connection Health Monitor", ConnectionHealthMonitor.UUID, {
+      format: Formats.TLV8,
+      perms: [Perms.NOTIFY, Perms.PAIRED_READ, Perms.PAIRED_WRITE],
+    });
+    this.value = this.getDefaultValue();
+  }
+}
+Characteristic.ConnectionHealthMonitor = ConnectionHealthMonitor;
+
+/**
  * Characteristic "Contact Sensor State"
  */
 export class ContactSensorState extends Characteristic {
@@ -746,6 +763,7 @@ Characteristic.CoolingThresholdTemperature = CoolingThresholdTemperature;
 
 /**
  * Characteristic "Crypto Hash"
+ * @since iOS 14.0
  */
 export class CryptoHash extends Characteristic {
 
@@ -1366,6 +1384,23 @@ export class FirmwareRevision extends Characteristic {
   }
 }
 Characteristic.FirmwareRevision = FirmwareRevision;
+
+/**
+ * Characteristic "Firmware Update Protocol List"
+ */
+export class FirmwareUpdateProtocolList extends Characteristic {
+
+  public static readonly UUID: string = "0000026F-0000-1000-8000-0026BB765291";
+
+  constructor() {
+    super("Firmware Update Protocol List", FirmwareUpdateProtocolList.UUID, {
+      format: Formats.TLV8,
+      perms: [Perms.PAIRED_READ],
+    });
+    this.value = this.getDefaultValue();
+  }
+}
+Characteristic.FirmwareUpdateProtocolList = FirmwareUpdateProtocolList;
 
 /**
  * Characteristic "Firmware Update Readiness"
@@ -2015,6 +2050,40 @@ export class Manufacturer extends Characteristic {
 Characteristic.Manufacturer = Manufacturer;
 
 /**
+ * Characteristic "Matter Firmware Revision Number"
+ */
+export class MatterFirmwareRevisionNumber extends Characteristic {
+
+  public static readonly UUID: string = "0000026D-0000-1000-8000-0026BB765291";
+
+  constructor() {
+    super("Matter Firmware Revision Number", MatterFirmwareRevisionNumber.UUID, {
+      format: Formats.UINT32,
+      perms: [Perms.NOTIFY, Perms.PAIRED_READ],
+    });
+    this.value = this.getDefaultValue();
+  }
+}
+Characteristic.MatterFirmwareRevisionNumber = MatterFirmwareRevisionNumber;
+
+/**
+ * Characteristic "Matter Firmware Update Status"
+ */
+export class MatterFirmwareUpdateStatus extends Characteristic {
+
+  public static readonly UUID: string = "0000026E-0000-1000-8000-0026BB765291";
+
+  constructor() {
+    super("Matter Firmware Update Status", MatterFirmwareUpdateStatus.UUID, {
+      format: Formats.TLV8,
+      perms: [Perms.NOTIFY, Perms.PAIRED_READ],
+    });
+    this.value = this.getDefaultValue();
+  }
+}
+Characteristic.MatterFirmwareUpdateStatus = MatterFirmwareUpdateStatus;
+
+/**
  * Characteristic "Maximum Transmit Power"
  * @since iOS 14
  */
@@ -2031,6 +2100,26 @@ export class MaximumTransmitPower extends Characteristic {
   }
 }
 Characteristic.MaximumTransmitPower = MaximumTransmitPower;
+
+/**
+ * Characteristic "Media Access Control Level"
+ */
+export class MediaAccessControlLevel extends Characteristic {
+
+  public static readonly UUID: string = "000000EE-0000-1000-8000-0026BB765291";
+
+  constructor() {
+    super("Media Access Control Level", MediaAccessControlLevel.UUID, {
+      format: Formats.UINT8,
+      perms: [Perms.NOTIFY, Perms.PAIRED_READ, Perms.PAIRED_WRITE],
+      minValue: 0,
+      maxValue: 2,
+      minStep: 1,
+    });
+    this.value = this.getDefaultValue();
+  }
+}
+Characteristic.MediaAccessControlLevel = MediaAccessControlLevel;
 
 /**
  * Characteristic "Metrics Buffer Full State"
@@ -2620,6 +2709,23 @@ export class PowerModeSelection extends Characteristic {
 Characteristic.PowerModeSelection = PowerModeSelection;
 
 /**
+ * Characteristic "Preferred Wi-Fi List"
+ */
+export class PreferredWiFiList extends Characteristic {
+
+  public static readonly UUID: string = "0000022E-0000-1000-8000-0026BB765291";
+
+  constructor() {
+    super("Preferred Wi-Fi List", PreferredWiFiList.UUID, {
+      format: Formats.TLV8,
+      perms: [Perms.NOTIFY, Perms.PAIRED_READ, Perms.PAIRED_WRITE],
+    });
+    this.value = this.getDefaultValue();
+  }
+}
+Characteristic.PreferredWiFiList = PreferredWiFiList;
+
+/**
  * Characteristic "Product Data"
  */
 export class ProductData extends Characteristic {
@@ -2807,6 +2913,7 @@ Characteristic.RelativeHumidityHumidifierThreshold = RelativeHumidityHumidifierT
 
 /**
  * Characteristic "Relay Control Point"
+ * @deprecated Removed
  */
 export class RelayControlPoint extends Characteristic {
 
@@ -2820,10 +2927,12 @@ export class RelayControlPoint extends Characteristic {
     this.value = this.getDefaultValue();
   }
 }
+// noinspection JSDeprecatedSymbols
 Characteristic.RelayControlPoint = RelayControlPoint;
 
 /**
  * Characteristic "Relay Enabled"
+ * @deprecated Removed
  */
 export class RelayEnabled extends Characteristic {
 
@@ -2837,10 +2946,12 @@ export class RelayEnabled extends Characteristic {
     this.value = this.getDefaultValue();
   }
 }
+// noinspection JSDeprecatedSymbols
 Characteristic.RelayEnabled = RelayEnabled;
 
 /**
  * Characteristic "Relay State"
+ * @deprecated Removed
  */
 export class RelayState extends Characteristic {
 
@@ -2857,6 +2968,7 @@ export class RelayState extends Characteristic {
     this.value = this.getDefaultValue();
   }
 }
+// noinspection JSDeprecatedSymbols
 Characteristic.RelayState = RelayState;
 
 /**
@@ -3031,6 +3143,9 @@ export class SecuritySystemAlarmType extends Characteristic {
 
   public static readonly UUID: string = "0000008E-0000-1000-8000-0026BB765291";
 
+  public static readonly NO_ALARM = 0;
+  public static readonly UNKNOWN = 1;
+
   constructor() {
     super("Security System Alarm Type", SecuritySystemAlarmType.UUID, {
       format: Formats.UINT8,
@@ -3038,6 +3153,7 @@ export class SecuritySystemAlarmType extends Characteristic {
       minValue: 0,
       maxValue: 1,
       minStep: 1,
+      validValues: [0, 1],
     });
     this.value = this.getDefaultValue();
   }
@@ -4044,6 +4160,7 @@ Characteristic.SwingMode = SwingMode;
 
 /**
  * Characteristic "Tap Type"
+ * @deprecated Removed
  */
 export class TapType extends Characteristic {
 
@@ -4057,6 +4174,7 @@ export class TapType extends Characteristic {
     this.value = this.getDefaultValue();
   }
 }
+// noinspection JSDeprecatedSymbols
 Characteristic.TapType = TapType;
 
 /**
@@ -4538,6 +4656,7 @@ Characteristic.ThreadStatus = ThreadStatus;
 
 /**
  * Characteristic "Token"
+ * @deprecated Removed
  */
 export class Token extends Characteristic {
 
@@ -4551,6 +4670,7 @@ export class Token extends Characteristic {
     this.value = this.getDefaultValue();
   }
 }
+// noinspection JSDeprecatedSymbols
 Characteristic.Token = Token;
 
 /**
@@ -4573,6 +4693,7 @@ Characteristic.TransmitPower = TransmitPower;
 
 /**
  * Characteristic "Tunnel Connection Timeout"
+ * @deprecated Removed
  */
 export class TunnelConnectionTimeout extends Characteristic {
 
@@ -4586,10 +4707,12 @@ export class TunnelConnectionTimeout extends Characteristic {
     this.value = this.getDefaultValue();
   }
 }
+// noinspection JSDeprecatedSymbols
 Characteristic.TunnelConnectionTimeout = TunnelConnectionTimeout;
 
 /**
  * Characteristic "Tunneled Accessory Advertising"
+ * @deprecated Removed
  */
 export class TunneledAccessoryAdvertising extends Characteristic {
 
@@ -4603,10 +4726,12 @@ export class TunneledAccessoryAdvertising extends Characteristic {
     this.value = this.getDefaultValue();
   }
 }
+// noinspection JSDeprecatedSymbols
 Characteristic.TunneledAccessoryAdvertising = TunneledAccessoryAdvertising;
 
 /**
  * Characteristic "Tunneled Accessory Connected"
+ * @deprecated Removed
  */
 export class TunneledAccessoryConnected extends Characteristic {
 
@@ -4620,10 +4745,12 @@ export class TunneledAccessoryConnected extends Characteristic {
     this.value = this.getDefaultValue();
   }
 }
+// noinspection JSDeprecatedSymbols
 Characteristic.TunneledAccessoryConnected = TunneledAccessoryConnected;
 
 /**
  * Characteristic "Tunneled Accessory State Number"
+ * @deprecated Removed
  */
 export class TunneledAccessoryStateNumber extends Characteristic {
 
@@ -4637,6 +4764,7 @@ export class TunneledAccessoryStateNumber extends Characteristic {
     this.value = this.getDefaultValue();
   }
 }
+// noinspection JSDeprecatedSymbols
 Characteristic.TunneledAccessoryStateNumber = TunneledAccessoryStateNumber;
 
 /**

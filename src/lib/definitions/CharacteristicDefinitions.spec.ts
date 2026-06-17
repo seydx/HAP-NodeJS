@@ -214,6 +214,12 @@ describe("CharacteristicDefinitions", () => {
     });
   });
 
+  describe("ConnectionHealthMonitor", () => {
+    it("should be able to construct", () => {
+      new Characteristic.ConnectionHealthMonitor();
+    });
+  });
+
   describe("ContactSensorState", () => {
     it("should be able to construct", () => {
       new Characteristic.ContactSensorState();
@@ -397,6 +403,12 @@ describe("CharacteristicDefinitions", () => {
   describe("FirmwareRevision", () => {
     it("should be able to construct", () => {
       new Characteristic.FirmwareRevision();
+    });
+  });
+
+  describe("FirmwareUpdateProtocolList", () => {
+    it("should be able to construct", () => {
+      new Characteristic.FirmwareUpdateProtocolList();
     });
   });
 
@@ -586,9 +598,27 @@ describe("CharacteristicDefinitions", () => {
     });
   });
 
+  describe("MatterFirmwareRevisionNumber", () => {
+    it("should be able to construct", () => {
+      new Characteristic.MatterFirmwareRevisionNumber();
+    });
+  });
+
+  describe("MatterFirmwareUpdateStatus", () => {
+    it("should be able to construct", () => {
+      new Characteristic.MatterFirmwareUpdateStatus();
+    });
+  });
+
   describe("MaximumTransmitPower", () => {
     it("should be able to construct", () => {
       new Characteristic.MaximumTransmitPower();
+    });
+  });
+
+  describe("MediaAccessControlLevel", () => {
+    it("should be able to construct", () => {
+      new Characteristic.MediaAccessControlLevel();
     });
   });
 
@@ -775,6 +805,12 @@ describe("CharacteristicDefinitions", () => {
   describe("PowerModeSelection", () => {
     it("should be able to construct", () => {
       new Characteristic.PowerModeSelection();
+    });
+  });
+
+  describe("PreferredWiFiList", () => {
+    it("should be able to construct", () => {
+      new Characteristic.PreferredWiFiList();
     });
   });
 

@@ -1,8 +1,222 @@
 # Change Log
 
-All notable changes to `hap-nodejs` will be documented in this file. This project tries to adhere to [Semantic Versioning](http://semver.org/).
+All notable changes to `@homebridge/hap-nodejs` will be documented in this file. This project tries to adhere to [Semantic Versioning](http://semver.org/).
 
-## v1.1.0 (2025-02-11)
+## v2.1.7 (2026-05-26)
+
+### Changes
+
+- chore: dependency updates
+- chore: drop local @types shims, use upstream bonjour-hap types
+- chore(ci): bump release workflow action versions
+- test: cover encrypted data length validation in pair handlers
+- test: cover required TLV field validation in pairing handlers
+- test: cover RTP proxy setup rejection handling
+- test: cover SEQUENCE_NUM presence check in pair handlers
+- test: cover M1 reset prevention in pair-setup
+- test: cover safe accessory lookups in slow/timeout warnings
+- test: cover aid.iid format validation
+- test: cover camera stream start TLV parsing guards
+- test: cover error argument in pairing debug logs
+- test: cover constant-time pincode comparison
+- test: cover characteristic warning message for non-Error throws
+- fix: improve HomeKit `Name` characteristic validation (#1119) (@n0rt0nthec4t)
+- docs: regenerate docs for `v2.1.7`
+
+### Homebridge Dependencies
+
+- `@homebridge/ciao` @ `v1.3.9`
+- `@homebridge/dbus-native` @ `v0.7.6`
+- `bonjour-hap` @ `v3.10.3`
+
+## v2.1.6 (2026-05-08)
+
+### Changes
+
+- fix: defer `ControllerStorage` construction until UUID is set
+- chore: route HKSV diagnostics through `HAP-NodeJS:HKSV` namespace
+- chore: dependency updates
+
+### Homebridge Dependencies
+
+- `@homebridge/ciao` @ `v1.3.8`
+- `@homebridge/dbus-native` @ `v0.7.5`
+- `bonjour-hap` @ `v3.10.2`
+
+## v2.1.5 (2026-05-05)
+
+### Changes
+
+- fix: drop `ConfiguredName` HIG warning
+- chore: dependency updates
+
+### Homebridge Dependencies
+
+- `@homebridge/ciao` @ `v1.3.8`
+- `@homebridge/dbus-native` @ `v0.7.5`
+- `bonjour-hap` @ `v3.10.2`
+
+## v2.1.4 (2026-05-04)
+
+### Changes
+
+- chore: dependency updates
+- docs: regenerate typedoc docs
+
+### Homebridge Dependencies
+
+- `@homebridge/ciao` @ `v1.3.8`
+- `@homebridge/dbus-native` @ `v0.7.5`
+- `bonjour-hap` @ `v3.10.2`
+
+## v2.1.3 (2026-04-26)
+
+### Changes
+
+- fix: int32 range check in `DataStreamParser`
+- fix: `readFloat64LE` missing reader index advance
+- fix: utf-8 tag using char count not byte length
+- fix: validate encrypted data length before crypto split
+- fix: validate required TLV fields in pairing handlers
+- fix: unhandled `Promise.all` rejection in RTP proxy setup
+- fix: missing `SEQUENCE_NUM` check in pair handlers
+- fix: prevent M1 resetting in-progress pair setup
+- fix: TLV decoder missing length bounds validation
+- fix: unsafe non-null assertions in accessory lookups
+- fix: validate `aid.iid` format before parsing
+- fix: unguarded buffer reads in camera stream TLV parsing
+- fix: category defaulting to string instead of enum
+- fix: missing error argument in pairing debug logs
+- fix: use constant-time comparison for pincode checks
+- fix: `"undefined"` string in characteristic error warnings
+- fix: O(n²) buffer concat in encrypt/decrypt hot path
+- chore: dependency updates, inc. `typescript`
+- docs: regenerate typedoc docs
+
+### Homebridge Dependencies
+
+- `@homebridge/ciao` @ `v1.3.7`
+- `@homebridge/dbus-native` @ `v0.7.4`
+- `bonjour-hap` @ `v3.10.1`
+
+## v2.1.2 (2026-03-29)
+
+### Changes
+
+- chore: update hap characteristics and services
+- dependency updates
+- regenerate documentation (`typedoc`) files
+
+### Homebridge Dependencies
+
+- `@homebridge/ciao` @ `v1.3.6`
+- `@homebridge/dbus-native` @ `v0.7.4`
+- `bonjour-hap` @ `v3.10.1`
+
+## v2.1.1 (2026-03-21)
+
+### Changes
+
+- Improvement: HKSV recording stream AbortSignal support and graceful generator termination. (#1111) (@hjdhjd)
+- dependency updates + fix code from new lint rules
+- regenerate documentation (`typedoc`) files
+
+### Homebridge Dependencies
+
+- `@homebridge/ciao` @ `v1.3.5`
+- `@homebridge/dbus-native` @ `v0.7.3`
+- `bonjour-hap` @ `v3.10.0`
+
+## v2.1.0 (2026-02-08)
+
+### Changes
+
+- update readme badges (use `shields.io`) (#1104)
+- update publish workflows for npm oidc auth (#1105)
+- dependency updates
+- update hap characteristics and services
+- regenerate documentation (`typedoc`) files
+
+### Homebridge Dependencies
+
+- `@homebridge/ciao` @ `v1.3.5`
+- `@homebridge/dbus-native` @ `v0.7.3`
+- `bonjour-hap` @ `v3.10.0`
+
+## v2.0.2 (2025-09-17)
+
+### Changes
+
+- dependency updates
+- code style - use `subarray` instead of `slice` for buffers
+- fix types around buffers in test files
+- update hap characteristics and services
+- regenerate documentation (`typedoc`) files
+- docs: remove unnecessary `@group` tags on interface declarations
+
+### Homebridge Dependencies
+
+- `@homebridge/ciao` @ `v1.3.4`
+- `@homebridge/dbus-native` @ `v0.7.2`
+- `bonjour-hap` @ `v3.9.1`
+
+## v2.0.1 (2025-07-23)
+
+### Changes
+
+- dependency updates
+
+### Homebridge Dependencies
+
+- `@homebridge/ciao` @ `v1.3.4`
+- `@homebridge/dbus-native` @ `v0.7.2`
+- `bonjour-hap` @ `v3.9.1`
+
+## v2.0.0 (2025-06-17)
+
+### Breaking
+
+- ⚠️ drop support for node v18
+  - the minimum node version required is now `v20`
+- ⚠️ republish as `@homebridge/hap-nodejs` for consistency
+
+### Changes
+
+- update `commander` from `v13` to `v14`
+- Added support for NodeJS 24
+- Update @homebridge/ciao to 1.3.3
+- update `jest` to `v30` and required migration steps
+- update `eslint` to `v9` and required migration steps
+
+### Homebridge Dependencies
+
+- `@homebridge/ciao` @ `v1.3.3`
+- `@homebridge/dbus-native` @ `v0.7.1`
+- `bonjour-hap` @ `v3.9.0`
+
+## v1.2.0 (2025-06-08)
+
+### Changes
+
+- add constants for `SecuritySystemAlarmType` (#1086)
+- update hk plist file from V=880 to V=886 (#1087)
+- updated dependencies (#1085)
+- fix OOC errors from `validateUserInput` on steps
+- merge branch 'release-0.x' into latest
+- fix some bad merge conflicts from previous commit
+- updated dependencies, use included types from `dbus-native` (#1092)
+
+### Homebridge Dependencies
+
+- `@homebridge/ciao` @ `v1.3.2`
+- `@homebridge/dbus-native` @ `v0.7.1`
+- `bonjour-hap` @ `v3.8.0`
+
+## v1.1.2 (2025-06-04)
+
+*No changes since v1.1.1, just a version bump to trigger a new release.*
+
+## v1.1.1 (2025-03-11)
 
 ### Changes
 
@@ -12,6 +226,11 @@ All notable changes to `hap-nodejs` will be documented in this file. This projec
 
 - Update docs
 - support node 22 + dependency updates (#1075)
+
+### Homebridge Dependencies
+
+- `@homebridge/ciao` @ `v1.3.0`
+- `bonjour-hap` @ `v3.8.0`
 
 ## v1.1.0 (2024-07-21)
 
@@ -23,6 +242,11 @@ All notable changes to `hap-nodejs` will be documented in this file. This projec
 
 - Update docs
 - Updated dependencies
+
+### Homebridge Dependencies
+
+- `@homebridge/ciao` @ `v1.3.0`
+- `bonjour-hap` @ `v3.8.0`
 
 ## v1.0.0 (2024-07-10)
 
@@ -64,7 +288,77 @@ All notable changes to `hap-nodejs` will be documented in this file. This projec
 - `@homebridge/ciao` @ `v1.3.0`
 - `bonjour-hap` @ `v3.8.0`
 
-## v0.12.3 (2024-10-25)
+## v0.14.3 (2026-03-29)
+
+### Changed
+
+- dependency updates
+- regenerate documentation for new version
+
+## v0.14.2 (2026-03-21)
+
+### Changed
+
+- Improvement: HKSV recording stream AbortSignal support and graceful generator termination. (#1111) (@hjdhjd)
+- dependency updates
+- regenerate documentation for new version
+
+## v0.14.1 (2026-02-07)
+
+### Changed
+
+- dependency updates
+- update release script for oidc releases
+
+## v0.14.0 (2025-10-29)
+
+### Changed
+
+- remove `treatWarningsAsErrors` flag from doc gen
+- updated dependencies, fix `Buffer` types
+- add node 24 to node engines in `package.json`
+
+### Homebridge Dependencies
+
+- `@homebridge/ciao` @ `v1.3.4`
+- `bonjour-hap` @ `v3.9.1`
+
+## v0.13.1 (2025-06-04)
+
+*No changes since v0.13.0, just a version bump to trigger a new release.*
+
+### Homebridge Dependencies
+
+- `@homebridge/ciao` @ `v1.3.1`
+- `bonjour-hap` @ `v3.9.0`
+
+## v0.13.0 (2025-06-04)
+
+### Changed
+
+_Most of these commits have been backported from the `v1.x` track. None should be breaking changes._
+
+- Mitigate event emitter "memory leak" warnings when a significant number of HomeKit camera streaming events occur simultaneously. (#1037)
+- fix type issue and fix ts build issue
+- Correct the formatting and presentation of some recording-related debug and error logging. (#1040)
+- AdaptiveLightingController fix & improvement (#1038)
+- Bridged core and core cleanup (#1048)
+- correct log spacing
+- fix: Ensure data is only transmitted on open and ready connections. (#1051)
+- Increase snapshot handler warning timeout to 8000ms. (#1055)
+- Cleanup and refactor `getLocalNetworkInterface` and address a potential edge case. (#1056)
+- add constants for `SecuritySystemAlarmType` (#1086)
+- update hk plist file from `V=880` to `V=886` (#1087)
+- dependency updates, lint and repo maintenance
+- fix OOC errors from `validateUserInput` on steps
+- regenerate documentation for new version
+
+### Homebridge Dependencies
+
+- `@homebridge/ciao` @ `v1.3.1`
+- `bonjour-hap` @ `v3.9.0`
+
+## v0.12.3 (2024-10-26)
 
 ### Changed
 

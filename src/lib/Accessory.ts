@@ -74,6 +74,7 @@ import { toShortForm } from "./util/uuid";
 import { checkName } from "./util/checkName";
 
 const debug = createDebug("HAP-NodeJS:Accessory");
+const hksvDebug = createDebug("HAP-NodeJS:HKSV");
 const MAX_ACCESSORIES = 149; // Maximum number of bridged accessories per bridge.
 const MAX_SERVICES = 100;
 
@@ -350,9 +351,6 @@ export const enum AccessoryEventTypes {
   CHARACTERISTIC_WARNING = "characteristic-warning",
 }
 
-/**
- * @group Accessory
- */
 // eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
 export declare interface Accessory {
   on(event: "identify", listener: (paired: boolean, callback: VoidCallback) => void): this;
@@ -437,7 +435,7 @@ export class Accessory extends EventEmitter {
   /**
    * @private Private API.
    */
-  controllerStorage: ControllerStorage = new ControllerStorage(this);
+  controllerStorage!: ControllerStorage;
   /**
    * @private Private API.
    */
@@ -464,6 +462,8 @@ export class Accessory extends EventEmitter {
     assert(UUID, "Accessories must be created with a valid UUID.");
     assert(uuid.isValid(UUID), "UUID '" + UUID + "' is not a valid UUID. Try using the provided 'generateUUID' function to create a " +
       "valid UUID from any arbitrary string, like a serial number.");
+
+    this.controllerStorage = new ControllerStorage(this);
 
     // create our initial "Accessory Information" Service that all Accessories are expected to have
     checkName(this.displayName, "Name", displayName);
@@ -1110,7 +1110,11 @@ export class Accessory extends EventEmitter {
     }
     service.setCharacteristic(Characteristic.Version, CiaoAdvertiser.protocolVersionService);
 
+    hksvDebug("[%s] publish: UUID=%s lastKnownUsername=%s newUsername=%s",
+      this.displayName, this.UUID, this.lastKnownUsername, info.username);
+
     if (this.lastKnownUsername && this.lastKnownUsername !== info.username) { // username changed since last publish
+      hksvDebug("[%s] publish: wiping data for previous username %s", this.displayName, this.lastKnownUsername);
       Accessory.cleanupAccessoryData(this.lastKnownUsername); // delete old Accessory data
     }
 
@@ -1330,14 +1334,15 @@ export class Accessory extends EventEmitter {
   private handleInitialPairSetupFinished(username: string, publicKey: Buffer, callback: PairCallback): void {
     debug("[%s] Paired with client %s", this.displayName, username);
 
-    // eslint-disable-next-line @typescript-eslint/no-unused-expressions
-    this._accessoryInfo && this._accessoryInfo.addPairedClient(username, publicKey, PermissionTypes.ADMIN);
-    // eslint-disable-next-line @typescript-eslint/no-unused-expressions
-    this._accessoryInfo && this._accessoryInfo.save();
+    if (this._accessoryInfo) {
+      this._accessoryInfo.addPairedClient(username, publicKey, PermissionTypes.ADMIN);
+      this._accessoryInfo.save();
+    }
 
     // update our advertisement, so it can pick up on the paired status of AccessoryInfo
-    // eslint-disable-next-line @typescript-eslint/no-unused-expressions
-    this._advertiser && this._advertiser.updateAdvertisement();
+    if (this._advertiser) {
+      this._advertiser.updateAdvertisement();
+    }
 
     callback();
 
@@ -1389,8 +1394,9 @@ export class Accessory extends EventEmitter {
     callback(0); // first of all ensure the pairing is removed before we advertise availability again
 
     if (!this._accessoryInfo.paired()) {
-      // eslint-disable-next-line @typescript-eslint/no-unused-expressions
-      this._advertiser && this._advertiser.updateAdvertisement();
+      if (this._advertiser) {
+        this._advertiser.updateAdvertisement();
+      }
       this.emit(AccessoryEventTypes.UNPAIRED);
 
       this.handleAccessoryUnpairedForControllers();
@@ -1448,8 +1454,11 @@ export class Accessory extends EventEmitter {
         const aid = parseInt(split[0], 10);
         const iid = parseInt(split[1], 10);
 
-        const accessory = this.getAccessoryByAID(aid)!;
-        const characteristic = accessory.getCharacteristicByIID(iid)!;
+        const accessory = this.getAccessoryByAID(aid);
+        const characteristic = accessory?.getCharacteristicByIID(iid);
+        if (!accessory || !characteristic) {
+          continue;
+        }
         this.sendCharacteristicWarning(characteristic, CharacteristicWarningType.SLOW_READ, "The read handler for the characteristic '" +
           characteristic.displayName + "' on the accessory '" + accessory.displayName + "' was slow to respond!");
       }
@@ -1463,8 +1472,11 @@ export class Accessory extends EventEmitter {
           const aid = parseInt(split[0], 10);
           const iid = parseInt(split[1], 10);
 
-          const accessory = this.getAccessoryByAID(aid)!;
-          const characteristic = accessory.getCharacteristicByIID(iid)!;
+          const accessory = this.getAccessoryByAID(aid);
+          const characteristic = accessory?.getCharacteristicByIID(iid);
+          if (!accessory || !characteristic) {
+            continue;
+          }
           this.sendCharacteristicWarning(characteristic, CharacteristicWarningType.TIMEOUT_READ, "The read handler for the characteristic '" +
             characteristic.displayName + "' on the accessory '" + accessory.displayName + "' didn't respond at all!. " +
             "Please check that you properly call the callback!");
@@ -1618,8 +1630,11 @@ export class Accessory extends EventEmitter {
         const aid = parseInt(split[0], 10);
         const iid = parseInt(split[1], 10);
 
-        const accessory = this.getAccessoryByAID(aid)!;
-        const characteristic = accessory.getCharacteristicByIID(iid)!;
+        const accessory = this.getAccessoryByAID(aid);
+        const characteristic = accessory?.getCharacteristicByIID(iid);
+        if (!accessory || !characteristic) {
+          continue;
+        }
         this.sendCharacteristicWarning(characteristic, CharacteristicWarningType.SLOW_WRITE, "The write handler for the characteristic '" +
           characteristic.displayName + "' on the accessory '" + accessory.displayName + "' was slow to respond!");
       }
@@ -1633,8 +1648,11 @@ export class Accessory extends EventEmitter {
           const aid = parseInt(split[0], 10);
           const iid = parseInt(split[1], 10);
 
-          const accessory = this.getAccessoryByAID(aid)!;
-          const characteristic = accessory.getCharacteristicByIID(iid)!;
+          const accessory = this.getAccessoryByAID(aid);
+          const characteristic = accessory?.getCharacteristicByIID(iid);
+          if (!accessory || !characteristic) {
+            continue;
+          }
           this.sendCharacteristicWarning(characteristic, CharacteristicWarningType.TIMEOUT_WRITE, "The write handler for the characteristic '" +
             characteristic.displayName + "' on the accessory '" + accessory.displayName + "' didn't respond at all!. " +
             "Please check that you properly call the callback!");
@@ -1841,6 +1859,9 @@ export class Accessory extends EventEmitter {
   private handleHAPConnectionClosed(connection: HAPConnection): void {
     for (const event of connection.getRegisteredEvents()) {
       const ids = event.split(".");
+      if (ids.length < 2) {
+        continue;
+      }
       const aid = parseInt(ids[0], 10);
       const iid = parseInt(ids[1], 10);
 
@@ -2016,13 +2037,14 @@ export class Accessory extends EventEmitter {
     });
 
     // also save controller which didn't get initialized (could lead to service duplication if we throw that data away)
-    // eslint-disable-next-line @typescript-eslint/no-unused-expressions
-    accessory.serializedControllers && Object.entries(accessory.serializedControllers).forEach(([id, serviceMap]) => {
-      controllers.push({
-        type: id,
-        services: Accessory.serializeServiceMap(serviceMap),
+    if (accessory.serializedControllers) {
+      Object.entries(accessory.serializedControllers).forEach(([id, serviceMap]) => {
+        controllers.push({
+          type: id,
+          services: Accessory.serializeServiceMap(serviceMap),
+        });
       });
-    });
+    }
 
     if (controllers.length > 0) {
       json.controllers = controllers;

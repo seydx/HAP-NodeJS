@@ -43,9 +43,6 @@ export const enum AccessControlEvent {
   PASSWORD_SETTING_UPDATED = "update-password",
 }
 
-/**
- * @group Television
- */
 // eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
 export declare interface AccessControlManagement {
   on(event: "update-control-level", listener: (accessLevel: AccessLevel) => void): this;

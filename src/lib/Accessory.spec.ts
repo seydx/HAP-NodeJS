@@ -126,6 +126,16 @@ describe("Accessory", () => {
       expect(() => new Accessory("Test", "test"))
         .toThrow("not a valid UUID");
     });
+
+    test("controllerStorage is constructed with the accessory UUID (homebridge#3928)", () => {
+      // Regression: prior to the fix, `controllerStorage` was a class-field
+      // initialiser that ran before `this.UUID` was assigned (under
+      // target: ES2022 / native class fields), so the storage object
+      // captured `undefined` as its accessory UUID. Constructing it in
+      // the constructor body, after UUID validation, prevents this.
+      // @ts-expect-error: private access
+      expect(accessory.controllerStorage.accessoryUUID).toBe(TEST_UUID);
+    });
   });
 
   describe("handling services", () => {
@@ -378,13 +388,13 @@ describe("Accessory", () => {
     beforeEach(() => {
       consoleWarnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
     });
-  
+
     afterEach(() => {
       consoleWarnSpy.mockRestore();
     });
 
     test("Accessory Name ending with !", async () => {
-      const accessoryBadName = new Accessory("Bad Name!",uuid.generate("Bad Name"));
+      const accessoryBadName = new Accessory("Bad Name!", uuid.generate("Bad Name"));
 
       const publishInfo: PublishInfo = {
         username: serverUsername,
@@ -394,8 +404,9 @@ describe("Accessory", () => {
       };
 
       await accessoryBadName.publish(publishInfo);
+      expect(consoleWarnSpy).toHaveBeenCalledTimes(1);
       // eslint-disable-next-line max-len
-      expect(consoleWarnSpy).toHaveBeenCalledWith("HAP-NodeJS WARNING: The accessory 'Bad Name!' has an invalid 'Name' characteristic ('Bad Name!'). Please use only alphanumeric, space, and apostrophe characters. Ensure it starts and ends with an alphabetic or numeric character, and avoid emojis. This may prevent the accessory from being added in the Home App or cause unresponsiveness.");
+      expect(consoleWarnSpy).toHaveBeenCalledWith("HAP-NodeJS WARNING: The accessory 'Bad Name!' has an invalid 'Name' characteristic ('Bad Name!'). Please ensure the name starts and ends with a letter or number. Only letters, numbers, spaces, apostrophes, and common punctuation are supported. Avoid emojis or unsupported symbols. This may prevent the accessory from being added in the Home App or cause unresponsiveness.");
 
       await awaitEventOnce(accessoryBadName, AccessoryEventTypes.ADVERTISED);
       await accessoryBadName?.unpublish();
@@ -403,7 +414,7 @@ describe("Accessory", () => {
     });
 
     test("Accessory Name containing !", async () => {
-      const accessoryBadName = new Accessory("Bad ! Name",uuid.generate("Bad Name"));
+      const accessoryBadName = new Accessory("Bad ! Name", uuid.generate("Bad Name"));
 
       const publishInfo: PublishInfo = {
         username: serverUsername,
@@ -413,8 +424,7 @@ describe("Accessory", () => {
       };
 
       await accessoryBadName.publish(publishInfo);
-      // eslint-disable-next-line max-len
-      expect(consoleWarnSpy).toHaveBeenCalledWith("HAP-NodeJS WARNING: The accessory 'Bad ! Name' has an invalid 'Name' characteristic ('Bad ! Name'). Please use only alphanumeric, space, and apostrophe characters. Ensure it starts and ends with an alphabetic or numeric character, and avoid emojis. This may prevent the accessory from being added in the Home App or cause unresponsiveness.");
+      expect(consoleWarnSpy).toHaveBeenCalledTimes(0);
 
       await awaitEventOnce(accessoryBadName, AccessoryEventTypes.ADVERTISED);
       await accessoryBadName?.unpublish();
@@ -422,7 +432,7 @@ describe("Accessory", () => {
     });
 
     test("Accessory Name containing '", async () => {
-      const accessoryBadName = new Accessory("Bad ' Name",uuid.generate("Bad ' Name"));
+      const accessoryBadName = new Accessory("Bad ' Name", uuid.generate("Bad ' Name"));
 
       const publishInfo: PublishInfo = {
         username: serverUsername,
@@ -432,7 +442,7 @@ describe("Accessory", () => {
       };
 
       await accessoryBadName.publish(publishInfo);
-      expect(consoleWarnSpy).toBeCalledTimes(0);
+      expect(consoleWarnSpy).toHaveBeenCalledTimes(0);
 
       await awaitEventOnce(accessoryBadName, AccessoryEventTypes.ADVERTISED);
       await accessoryBadName?.unpublish();
@@ -440,7 +450,7 @@ describe("Accessory", () => {
     });
 
     test("Accessory Name starting with '", async () => {
-      const accessoryBadName = new Accessory("'Bad Name",uuid.generate("Bad Name'"));
+      const accessoryBadName = new Accessory("'Bad Name", uuid.generate("Bad Name"));
 
       const publishInfo: PublishInfo = {
         username: serverUsername,
@@ -450,10 +460,9 @@ describe("Accessory", () => {
       };
 
       await accessoryBadName.publish(publishInfo);
-      expect(accessoryBadName.displayName.startsWith(TEST_DISPLAY_NAME));
-      expect(consoleWarnSpy).toBeCalledTimes(2);
+      expect(consoleWarnSpy).toHaveBeenCalledTimes(2);
       // eslint-disable-next-line max-len
-      expect(consoleWarnSpy).toHaveBeenCalledWith("HAP-NodeJS WARNING: The accessory ''Bad Name' has an invalid 'Name' characteristic (''Bad Name'). Please use only alphanumeric, space, and apostrophe characters. Ensure it starts and ends with an alphabetic or numeric character, and avoid emojis. This may prevent the accessory from being added in the Home App or cause unresponsiveness.");
+      expect(consoleWarnSpy).toHaveBeenCalledWith("HAP-NodeJS WARNING: The accessory ''Bad Name' has an invalid 'Name' characteristic (''Bad Name'). Please ensure the name starts and ends with a letter or number. Only letters, numbers, spaces, apostrophes, and common punctuation are supported. Avoid emojis or unsupported symbols. This may prevent the accessory from being added in the Home App or cause unresponsiveness.");
 
       await awaitEventOnce(accessoryBadName, AccessoryEventTypes.ADVERTISED);
       await accessoryBadName?.unpublish();
@@ -462,7 +471,7 @@ describe("Accessory", () => {
 
     test("Service Name containing !", async () => {
       const switchService = new Service.Switch("My Bad ! Switch");
-      const accessoryBadName = new Accessory("Bad Name",uuid.generate("Bad Name"));
+      const accessoryBadName = new Accessory("Bad Name", uuid.generate("Bad Name"));
       accessoryBadName.addService(switchService);
 
       const publishInfo: PublishInfo = {
@@ -473,8 +482,7 @@ describe("Accessory", () => {
       };
 
       await accessoryBadName.publish(publishInfo);
-      // eslint-disable-next-line max-len
-      expect(consoleWarnSpy).toHaveBeenCalledWith("HAP-NodeJS WARNING: The accessory 'My Bad ! Switch' has an invalid 'Name' characteristic ('My Bad ! Switch'). Please use only alphanumeric, space, and apostrophe characters. Ensure it starts and ends with an alphabetic or numeric character, and avoid emojis. This may prevent the accessory from being added in the Home App or cause unresponsiveness.");
+      expect(consoleWarnSpy).toHaveBeenCalledTimes(0);
 
       await awaitEventOnce(accessoryBadName, AccessoryEventTypes.ADVERTISED);
       await accessoryBadName?.unpublish();
@@ -483,7 +491,7 @@ describe("Accessory", () => {
 
     test("Service Name ending with !", async () => {
       const switchService = new Service.Switch("My Bad Switch!");
-      const accessoryBadName = new Accessory("Bad Name",uuid.generate("Bad Name"));
+      const accessoryBadName = new Accessory("Bad Name", uuid.generate("Bad Name"));
       accessoryBadName.addService(switchService);
 
       const publishInfo: PublishInfo = {
@@ -494,9 +502,9 @@ describe("Accessory", () => {
       };
 
       await accessoryBadName.publish(publishInfo);
-      expect(consoleWarnSpy).toBeCalledTimes(1);
+      expect(consoleWarnSpy).toHaveBeenCalledTimes(1);
       // eslint-disable-next-line max-len
-      expect(consoleWarnSpy).toHaveBeenCalledWith("HAP-NodeJS WARNING: The accessory 'My Bad Switch!' has an invalid 'Name' characteristic ('My Bad Switch!'). Please use only alphanumeric, space, and apostrophe characters. Ensure it starts and ends with an alphabetic or numeric character, and avoid emojis. This may prevent the accessory from being added in the Home App or cause unresponsiveness.");
+      expect(consoleWarnSpy).toHaveBeenCalledWith("HAP-NodeJS WARNING: The accessory 'My Bad Switch!' has an invalid 'Name' characteristic ('My Bad Switch!'). Please ensure the name starts and ends with a letter or number. Only letters, numbers, spaces, apostrophes, and common punctuation are supported. Avoid emojis or unsupported symbols. This may prevent the accessory from being added in the Home App or cause unresponsiveness.");
 
       await awaitEventOnce(accessoryBadName, AccessoryEventTypes.ADVERTISED);
       await accessoryBadName?.unpublish();
@@ -505,7 +513,7 @@ describe("Accessory", () => {
 
     test("Service Name containing '", async () => {
       const switchService = new Service.Switch("My Bad ' Switch");
-      const accessoryBadName = new Accessory("Bad Name",uuid.generate("Bad Name"));
+      const accessoryBadName = new Accessory("Bad Name", uuid.generate("Bad Name"));
       accessoryBadName.addService(switchService);
 
       const publishInfo: PublishInfo = {
@@ -516,7 +524,7 @@ describe("Accessory", () => {
       };
 
       await accessoryBadName.publish(publishInfo);
-      expect(consoleWarnSpy).toBeCalledTimes(0);
+      expect(consoleWarnSpy).toHaveBeenCalledTimes(0);
 
       await awaitEventOnce(accessoryBadName, AccessoryEventTypes.ADVERTISED);
       await accessoryBadName?.unpublish();
@@ -525,7 +533,7 @@ describe("Accessory", () => {
 
     test("Service Name ending with '", async () => {
       const switchService = new Service.Switch("My Bad Switch'");
-      const accessoryBadName = new Accessory("Bad Name",uuid.generate("Bad Name"));
+      const accessoryBadName = new Accessory("Bad Name", uuid.generate("Bad Name"));
       accessoryBadName.addService(switchService);
 
       const publishInfo: PublishInfo = {
@@ -536,9 +544,9 @@ describe("Accessory", () => {
       };
 
       await accessoryBadName.publish(publishInfo);
-      expect(consoleWarnSpy).toBeCalledTimes(1);
+      expect(consoleWarnSpy).toHaveBeenCalledTimes(1);
       // eslint-disable-next-line max-len
-      expect(consoleWarnSpy).toHaveBeenCalledWith("HAP-NodeJS WARNING: The accessory 'My Bad Switch'' has an invalid 'Name' characteristic ('My Bad Switch''). Please use only alphanumeric, space, and apostrophe characters. Ensure it starts and ends with an alphabetic or numeric character, and avoid emojis. This may prevent the accessory from being added in the Home App or cause unresponsiveness.");
+      expect(consoleWarnSpy).toHaveBeenCalledWith("HAP-NodeJS WARNING: The accessory 'My Bad Switch'' has an invalid 'Name' characteristic ('My Bad Switch''). Please ensure the name starts and ends with a letter or number. Only letters, numbers, spaces, apostrophes, and common punctuation are supported. Avoid emojis or unsupported symbols. This may prevent the accessory from being added in the Home App or cause unresponsiveness.");
 
       await awaitEventOnce(accessoryBadName, AccessoryEventTypes.ADVERTISED);
       await accessoryBadName?.unpublish();
@@ -547,7 +555,7 @@ describe("Accessory", () => {
 
     test("Service Name beginning with '", async () => {
       const switchService = new Service.Switch("'My Bad Switch");
-      const accessoryBadName = new Accessory("Bad Name",uuid.generate("Bad Name"));
+      const accessoryBadName = new Accessory("Bad Name", uuid.generate("Bad Name"));
       accessoryBadName.addService(switchService);
 
       const publishInfo: PublishInfo = {
@@ -558,20 +566,23 @@ describe("Accessory", () => {
       };
 
       await accessoryBadName.publish(publishInfo);
-      expect(consoleWarnSpy).toBeCalledTimes(1);
+      expect(consoleWarnSpy).toHaveBeenCalledTimes(1);
       // eslint-disable-next-line max-len
-      expect(consoleWarnSpy).toHaveBeenCalledWith("HAP-NodeJS WARNING: The accessory ''My Bad Switch' has an invalid 'Name' characteristic (''My Bad Switch'). Please use only alphanumeric, space, and apostrophe characters. Ensure it starts and ends with an alphabetic or numeric character, and avoid emojis. This may prevent the accessory from being added in the Home App or cause unresponsiveness.");
+      expect(consoleWarnSpy).toHaveBeenCalledWith("HAP-NodeJS WARNING: The accessory ''My Bad Switch' has an invalid 'Name' characteristic (''My Bad Switch'). Please ensure the name starts and ends with a letter or number. Only letters, numbers, spaces, apostrophes, and common punctuation are supported. Avoid emojis or unsupported symbols. This may prevent the accessory from being added in the Home App or cause unresponsiveness.");
 
       await awaitEventOnce(accessoryBadName, AccessoryEventTypes.ADVERTISED);
       await accessoryBadName?.unpublish();
       await accessoryBadName?.destroy();
     });
 
-    test("Service ConfiguredName beginning with '", async () => {
-      const switchService = new Service.Switch("My Bad Switch");
-      const accessoryBadName = new Accessory("Bad Name",uuid.generate("Bad Name"));
+    test("Service ConfiguredName is not subject to Name character checks", async () => {
+      // ConfiguredName is the user-editable label on services like InputSource,
+      // Television and SmartSpeaker. Home accepts a wider character set there
+      // than the HIG suggests for Name, so HAP-NodeJS must not warn on it.
+      const switchService = new Service.Switch("Switch");
+      const accessoryConfiguredName = new Accessory("Configured Name", uuid.generate("Configured Name"));
       switchService.addCharacteristic(Characteristic.ConfiguredName);
-      accessoryBadName.addService(switchService);
+      accessoryConfiguredName.addService(switchService);
 
       const publishInfo: PublishInfo = {
         username: serverUsername,
@@ -580,19 +591,17 @@ describe("Accessory", () => {
         advertiser: undefined,
       };
 
-      await accessoryBadName.publish(publishInfo);
+      await accessoryConfiguredName.publish(publishInfo);
 
+      switchService.getCharacteristic(Characteristic.ConfiguredName).updateValue("Leave Home + 1");
       switchService.getCharacteristic(Characteristic.ConfiguredName).updateValue("'Bad Name");
 
-      expect(consoleWarnSpy).toBeCalledTimes(1);
-      // eslint-disable-next-line max-len
-      expect(consoleWarnSpy).toHaveBeenCalledWith("HAP-NodeJS WARNING: The accessory 'Configured Name' has an invalid 'ConfiguredName' characteristic (''Bad Name'). Please use only alphanumeric, space, and apostrophe characters. Ensure it starts and ends with an alphabetic or numeric character, and avoid emojis. This may prevent the accessory from being added in the Home App or cause unresponsiveness.");
+      expect(consoleWarnSpy).not.toHaveBeenCalled();
 
-      await awaitEventOnce(accessoryBadName, AccessoryEventTypes.ADVERTISED);
-      await accessoryBadName?.unpublish();
-      await accessoryBadName?.destroy();
+      await awaitEventOnce(accessoryConfiguredName, AccessoryEventTypes.ADVERTISED);
+      await accessoryConfiguredName?.unpublish();
+      await accessoryConfiguredName?.destroy();
     });
-
   });
 
   describe("pairing", () => {
@@ -611,17 +620,16 @@ describe("Accessory", () => {
       accessory._accessoryInfo = accessoryInfoUnpaired;
 
       const publicKey = crypto.randomBytes(32);
-      // eslint-disable-next-line @typescript-eslint/no-empty-function
       const callback = jest.fn();
       // @ts-expect-error: private access
       accessory.handleInitialPairSetupFinished(clientUsername0, publicKey, callback);
 
-      expect(accessoryInfoUnpaired.addPairedClient).toBeCalledTimes(1);
-      expect(accessoryInfoUnpaired.addPairedClient).toBeCalledWith(clientUsername0, publicKey, PermissionTypes.ADMIN);
+      expect(accessoryInfoUnpaired.addPairedClient).toHaveBeenCalledTimes(1);
+      expect(accessoryInfoUnpaired.addPairedClient).toHaveBeenCalledWith(clientUsername0, publicKey, PermissionTypes.ADMIN);
 
-      expect(saveMock).toBeCalledTimes(1);
+      expect(saveMock).toHaveBeenCalledTimes(1);
 
-      expect(advertiser.updateAdvertisement).toBeCalledTimes(1);
+      expect(advertiser.updateAdvertisement).toHaveBeenCalledTimes(1);
 
       await advertiser.destroy();
     });
@@ -630,14 +638,14 @@ describe("Accessory", () => {
       test("unavailable", () => {
         // @ts-expect-error: private access
         accessory.handleAddPairing(connection, clientUsername1, clientPublicKey1, PermissionTypes.USER, callback);
-        expect(callback).toBeCalledWith(TLVErrorCode.UNAVAILABLE);
+        expect(callback).toHaveBeenCalledWith(TLVErrorCode.UNAVAILABLE);
       });
 
       test("missing admin permissions", () => {
         accessory._accessoryInfo = accessoryInfoUnpaired;
         // @ts-expect-error: private access
         accessory.handleAddPairing(connection, clientUsername1, clientPublicKey1, PermissionTypes.USER, callback);
-        expect(callback).toBeCalledWith(TLVErrorCode.AUTHENTICATION);
+        expect(callback).toHaveBeenCalledWith(TLVErrorCode.AUTHENTICATION);
       });
 
       test.each([PermissionTypes.USER, PermissionTypes.ADMIN])(
@@ -646,7 +654,7 @@ describe("Accessory", () => {
 
           // @ts-expect-error: private access
           accessory.handleAddPairing(connection, clientUsername1, clientPublicKey1, type, callback);
-          expect(callback).toBeCalledWith(0);
+          expect(callback).toHaveBeenCalledWith(0);
 
           const expectedPairings: PairingInformation[] = [
             defaultPairingInfo,
@@ -657,7 +665,7 @@ describe("Accessory", () => {
           expect(accessoryInfoPaired.pairedAdminClients)
             .toEqual(type === PermissionTypes.ADMIN ? 2 : 1);
 
-          expect(saveMock).toBeCalledTimes(1);
+          expect(saveMock).toHaveBeenCalledTimes(1);
         });
 
       test.each([
@@ -674,7 +682,7 @@ describe("Accessory", () => {
 
           // @ts-expect-error: private access
           accessory.handleAddPairing(connection, clientUsername1, clientPublicKey1, type.update, callback);
-          expect(callback).toBeCalledWith(0);
+          expect(callback).toHaveBeenCalledWith(0);
 
           const expectedPairings: PairingInformation[] = [
             defaultPairingInfo,
@@ -685,7 +693,7 @@ describe("Accessory", () => {
           expect(accessoryInfoPaired.pairedAdminClients)
             .toEqual(type.update === PermissionTypes.ADMIN ? 2 : 1);
 
-          expect(saveMock).toBeCalledTimes(1);
+          expect(saveMock).toHaveBeenCalledTimes(1);
         });
 
       test("update permission with non-matching public key", () => {
@@ -694,7 +702,7 @@ describe("Accessory", () => {
 
         // @ts-expect-error: private access
         accessory.handleAddPairing(connection, clientUsername1, crypto.randomBytes(32), PermissionTypes.ADMIN, callback);
-        expect(callback).toBeCalledWith(TLVErrorCode.UNKNOWN);
+        expect(callback).toHaveBeenCalledWith(TLVErrorCode.UNKNOWN);
       });
     });
 
@@ -712,14 +720,14 @@ describe("Accessory", () => {
       test("unavailable", () => {
         // @ts-expect-error: private access
         accessory.handleRemovePairing(connection, clientUsername1, callback);
-        expect(callback).toBeCalledWith(TLVErrorCode.UNAVAILABLE);
+        expect(callback).toHaveBeenCalledWith(TLVErrorCode.UNAVAILABLE);
       });
 
       test("missing admin permissions", () => {
         accessory._accessoryInfo = accessoryInfoUnpaired;
         // @ts-expect-error: private access
         accessory.handleRemovePairing(connection, clientUsername1, callback);
-        expect(callback).toBeCalledWith(TLVErrorCode.AUTHENTICATION);
+        expect(callback).toHaveBeenCalledWith(TLVErrorCode.AUTHENTICATION);
       });
 
       test.each([PermissionTypes.ADMIN, PermissionTypes.USER])(
@@ -731,15 +739,15 @@ describe("Accessory", () => {
 
           // @ts-expect-error: private access
           accessory.handleRemovePairing(connection, clientUsername1, callback);
-          expect(callback).toBeCalledWith(0);
+          expect(callback).toHaveBeenCalledWith(0);
 
           expect(accessoryInfoPaired.listPairings())
             .toEqual([ defaultPairingInfo ]);
           expect(accessoryInfoPaired.pairedAdminClients).toEqual(1);
 
-          expect(EventedHTTPServer.destroyExistingConnectionsAfterUnpair).toBeCalledTimes(1);
+          expect(EventedHTTPServer.destroyExistingConnectionsAfterUnpair).toHaveBeenCalledTimes(1);
           expect(EventedHTTPServer.destroyExistingConnectionsAfterUnpair)
-            .toBeCalledWith(connection, clientUsername1);
+            .toHaveBeenCalledWith(connection, clientUsername1);
         });
 
       test("remove last ADMIN pairing", () => {
@@ -764,23 +772,23 @@ describe("Accessory", () => {
 
         // @ts-expect-error: private access
         accessory.handleRemovePairing(connection, clientUsername0, callback);
-        expect(callback).toBeCalledWith(0);
+        expect(callback).toHaveBeenCalledWith(0);
 
         expect(accessoryInfoPaired.listPairings()).toEqual([]);
         expect(accessoryInfoPaired.pairedAdminClients).toEqual(0);
 
         // verify calls to _removePairedClient0
-        expect(_removePairedClient0Mock).toBeCalledTimes(2);
+        expect(_removePairedClient0Mock).toHaveBeenCalledTimes(2);
         expect(_removePairedClient0Mock)
           .toHaveBeenNthCalledWith(1, connection, clientUsername0);
         expect(_removePairedClient0Mock)
           .toHaveBeenNthCalledWith(2, connection, clientUsername1); // it shall also remove the user pairing
 
-        expect(EventedHTTPServer.destroyExistingConnectionsAfterUnpair).toBeCalledTimes(2);
+        expect(EventedHTTPServer.destroyExistingConnectionsAfterUnpair).toHaveBeenCalledTimes(2);
 
         // verify that accessory is marked as unpaired again
-        expect(advertiser.updateAdvertisement).toBeCalledTimes(1);
-        expect(eventMock).toBeCalledTimes(1);
+        expect(advertiser.updateAdvertisement).toHaveBeenCalledTimes(1);
+        expect(eventMock).toHaveBeenCalledTimes(1);
       });
     });
 
@@ -788,28 +796,28 @@ describe("Accessory", () => {
       test("unavailable", () => {
         // @ts-expect-error: private access
         accessory.handleListPairings(connection, callback);
-        expect(callback).toBeCalledWith(TLVErrorCode.UNAVAILABLE);
+        expect(callback).toHaveBeenCalledWith(TLVErrorCode.UNAVAILABLE);
       });
 
       test("missing admin permissions", () => {
         accessory._accessoryInfo = accessoryInfoUnpaired;
         // @ts-expect-error: private access
         accessory.handleListPairings(connection, callback);
-        expect(callback).toBeCalledWith(TLVErrorCode.AUTHENTICATION);
+        expect(callback).toHaveBeenCalledWith(TLVErrorCode.AUTHENTICATION);
 
         accessory._accessoryInfo = accessoryInfoPaired;
         accessoryInfoPaired.addPairedClient(clientUsername1, clientPublicKey1, PermissionTypes.USER);
         connection.username = clientUsername1;
         // @ts-expect-error: private access
         accessory.handleListPairings(connection, callback);
-        expect(callback).toBeCalledWith(TLVErrorCode.AUTHENTICATION);
+        expect(callback).toHaveBeenCalledWith(TLVErrorCode.AUTHENTICATION);
       });
 
       test("list pairings", () => {
         accessory._accessoryInfo = accessoryInfoPaired;
         // @ts-expect-error: private access
         accessory.handleListPairings(connection, callback);
-        expect(callback).toBeCalledWith(0, [ defaultPairingInfo ]);
+        expect(callback).toHaveBeenCalledWith(0, [ defaultPairingInfo ]);
       });
     });
   });
@@ -847,6 +855,7 @@ describe("Accessory", () => {
         username: serverUsername,
         pincode: "123-45-678",
         category: Categories.SWITCH,
+        advertiser: MDNSAdvertiser.BONJOUR,
       };
 
       switchService = new Service.Switch("Switch");
@@ -978,8 +987,8 @@ describe("Accessory", () => {
             ],
           }],
         };
-        expect(callback).toBeCalledTimes(1);
-        expect(callback).toBeCalledWith(undefined, expected);
+        expect(callback).toHaveBeenCalledTimes(1);
+        expect(callback).toHaveBeenCalledWith(undefined, expected);
       });
     });
 
@@ -1004,8 +1013,8 @@ describe("Accessory", () => {
           characteristics: expectedReadData,
         };
 
-        expect(callback).toBeCalledTimes(1);
-        expect(callback).toBeCalledWith(undefined, expectedResponse);
+        expect(callback).toHaveBeenCalledTimes(1);
+        expect(callback).toHaveBeenCalledWith(undefined, expectedResponse);
 
         callback.mockReset();
       };
@@ -1191,6 +1200,88 @@ describe("Accessory", () => {
       });
     });
 
+    describe("aid.iid format validation in handleHAPConnectionClosed (fix ec93c504)", () => {
+      test("should skip registered events without a dot separator", () => {
+        const clearMock = jest.fn();
+        const mockConnection = {
+          getRegisteredEvents: jest.fn().mockReturnValue(new Set([
+            "malformed",         // no dot — without the fix this triggers parseInt(undefined)
+            `${aid}.${iids.on}`, // valid
+          ])),
+          clearRegisteredEvents: clearMock,
+        } as unknown as HAPConnection;
+
+        // @ts-expect-error: private access
+        expect(() => accessory.handleHAPConnectionClosed(mockConnection)).not.toThrow();
+        expect(clearMock).toHaveBeenCalled();
+      });
+
+      test("should skip empty registered event strings", () => {
+        const mockConnection = {
+          getRegisteredEvents: jest.fn().mockReturnValue(new Set(["", `${aid}.${iids.on}`])),
+          clearRegisteredEvents: jest.fn(),
+        } as unknown as HAPConnection;
+
+        // @ts-expect-error: private access
+        expect(() => accessory.handleHAPConnectionClosed(mockConnection)).not.toThrow();
+      });
+    });
+
+    describe("non-null assertions in accessory lookups (fix 03b49f9f)", () => {
+      test("slow read / timeout warning should not crash for unknown aid.iid in request", async () => {
+        jest.useFakeTimers({ doNotFake: ["nextTick", "queueMicrotask"] });
+
+        try {
+          // @ts-expect-error: private access
+          accessory.handleGetCharacteristics(connection, {
+            ids: [
+              { aid: 999, iid: 999 }, // unknown accessory — exercises `!accessory`
+              { aid: aid, iid: 9999 }, // known accessory, unknown iid — exercises `!characteristic`
+            ],
+            includeMeta: false,
+            includeEvent: false,
+            includeType: false,
+            includePerms: false,
+          }, callback);
+
+          // 3s slow read warning fires; without the fix this would throw on
+          // `accessory!.getCharacteristicByIID(...)` or `characteristic!.displayName`.
+          jest.advanceTimersByTime(3000);
+          // 6s later the timeout warning fires and the response is emitted.
+          jest.advanceTimersByTime(6000);
+
+          await callbackPromise;
+          expect(callback).toHaveBeenCalledTimes(1);
+          // unknown ids are skipped, so the response has no characteristics
+          expect(callback.mock.calls[0][1].characteristics).toEqual([]);
+        } finally {
+          jest.useRealTimers();
+        }
+      });
+
+      test("slow write / timeout warning should not crash for unknown aid.iid in request", async () => {
+        jest.useFakeTimers({ doNotFake: ["nextTick", "queueMicrotask"] });
+
+        try {
+          // @ts-expect-error: private access
+          accessory.handleSetCharacteristics(connection, {
+            characteristics: [
+              { aid: 999, iid: 999, value: true },
+              { aid: aid, iid: 9999, value: true },
+            ],
+          }, callback);
+
+          jest.advanceTimersByTime(3000);
+          jest.advanceTimersByTime(6000);
+
+          await callbackPromise;
+          expect(callback).toHaveBeenCalledTimes(1);
+        } finally {
+          jest.useRealTimers();
+        }
+      });
+    });
+
     describe("handleSetCharacteristic", () => {
       let consoleWarnSpy: jest.SpyInstance;
 
@@ -1220,8 +1311,8 @@ describe("Accessory", () => {
           characteristics: expectedReadData,
         };
 
-        expect(callback).toBeCalledTimes(1);
-        expect(callback).toBeCalledWith(undefined, expectedResponse);
+        expect(callback).toHaveBeenCalledTimes(1);
+        expect(callback).toHaveBeenCalledWith(undefined, expectedResponse);
 
         callback.mockReset();
       };
@@ -1368,8 +1459,8 @@ describe("Accessory", () => {
           iid: iids.on,
           status: HAPStatus.SUCCESS,
         });
-        expect(connection.enableEventNotifications).not.toBeCalled();
-        expect(connection.disableEventNotifications).not.toBeCalled();
+        expect(connection.enableEventNotifications).not.toHaveBeenCalled();
+        expect(connection.disableEventNotifications).not.toHaveBeenCalled();
         // @ts-expect-error: private access
         expect(onCharacteristic.subscriptions).toEqual(0);
 
@@ -1393,8 +1484,8 @@ describe("Accessory", () => {
           iid: iids.on,
           status: HAPStatus.SUCCESS,
         });
-        expect(connection.enableEventNotifications).toBeCalledTimes(1); // >stays< at 1 invocation
-        expect(connection.disableEventNotifications).not.toBeCalled();
+        expect(connection.enableEventNotifications).toHaveBeenCalledTimes(1); // >stays< at 1 invocation
+        expect(connection.disableEventNotifications).not.toHaveBeenCalled();
         // @ts-expect-error: private access
         expect(onCharacteristic.subscriptions).toEqual(1);
 
@@ -1444,7 +1535,7 @@ describe("Accessory", () => {
           iid: iids.on,
           status: HAPStatus.SUCCESS,
         });
-        expect(connection.enableEventNotifications).toBeCalled();
+        expect(connection.enableEventNotifications).toHaveBeenCalledTimes(1);
         // @ts-expect-error: private access
         expect(onCharacteristic.subscriptions).toEqual(1);
 
@@ -1463,7 +1554,7 @@ describe("Accessory", () => {
         // @ts-expect-error: private access
         accessory.handleHAPConnectionClosed(connection);
 
-        expect(connection.clearRegisteredEvents).toBeCalled();
+        expect(connection.clearRegisteredEvents).toHaveBeenCalledTimes(1);
         // @ts-expect-error: private access
         expect(accessory.findCharacteristic).toHaveBeenCalledWith(aid, iids.on);
         // @ts-expect-error: private access

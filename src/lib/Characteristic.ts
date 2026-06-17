@@ -39,6 +39,7 @@ import type {
   ColorTemperature,
   ConfigurationState,
   ConfiguredName,
+  ConnectionHealthMonitor,
   ContactSensorState,
   CoolingThresholdTemperature,
   CryptoHash,
@@ -70,6 +71,7 @@ import type {
   FilterChangeIndication,
   FilterLifeLevel,
   FirmwareRevision,
+  FirmwareUpdateProtocolList,
   FirmwareUpdateReadiness,
   FirmwareUpdateStatus,
   HardwareFinish,
@@ -101,7 +103,10 @@ import type {
   ManagedNetworkEnable,
   ManuallyDisabled,
   Manufacturer,
+  MatterFirmwareRevisionNumber,
+  MatterFirmwareUpdateStatus,
   MaximumTransmitPower,
+  MediaAccessControlLevel,
   MetricsBufferFullState,
   Model,
   MotionDetected,
@@ -133,6 +138,7 @@ import type {
   PM2_5Density,
   PositionState,
   PowerModeSelection,
+  PreferredWiFiList,
   ProductData,
   ProgrammableSwitchEvent,
   ProgrammableSwitchOutputState,
@@ -264,7 +270,6 @@ import {
   numericUpperBound,
 } from "./util/request-util";
 import { BASE_UUID, toShortForm } from "./util/uuid";
-import { checkName } from "./util/checkName";
 
 const debug = createDebug("HAP-NodeJS:Characteristic");
 
@@ -331,9 +336,7 @@ export const enum Units {
  * @group Characteristic
  */
 export const enum Perms {
-  // eslint-disable-next-line @typescript-eslint/no-duplicate-enum-values
   PAIRED_READ = "pr",
-  // eslint-disable-next-line @typescript-eslint/no-duplicate-enum-values
   PAIRED_WRITE = "pw",
   NOTIFY = "ev",
   // eslint-disable-next-line @typescript-eslint/no-duplicate-enum-values
@@ -525,9 +528,6 @@ export type CharacteristicSetHandler = (value: CharacteristicValue, context: Cha
  */
 export type AdditionalAuthorizationHandler = (additionalAuthorizationData: string | undefined) => boolean;
 
-/**
- * @group Characteristic
- */
 // eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
 export declare interface Characteristic {
 
@@ -817,6 +817,10 @@ export class Characteristic extends EventEmitter {
   /**
    * @group Characteristic Definitions
    */
+  public static ConnectionHealthMonitor: typeof ConnectionHealthMonitor;
+  /**
+   * @group Characteristic Definitions
+   */
   public static ContactSensorState: typeof ContactSensorState;
   /**
    * @group Characteristic Definitions
@@ -938,6 +942,10 @@ export class Characteristic extends EventEmitter {
    * @group Characteristic Definitions
    */
   public static FirmwareRevision: typeof FirmwareRevision;
+  /**
+   * @group Characteristic Definitions
+   */
+  public static FirmwareUpdateProtocolList: typeof FirmwareUpdateProtocolList;
   /**
    * @group Characteristic Definitions
    */
@@ -1065,7 +1073,19 @@ export class Characteristic extends EventEmitter {
   /**
    * @group Characteristic Definitions
    */
+  public static MatterFirmwareRevisionNumber: typeof MatterFirmwareRevisionNumber;
+  /**
+   * @group Characteristic Definitions
+   */
+  public static MatterFirmwareUpdateStatus: typeof MatterFirmwareUpdateStatus;
+  /**
+   * @group Characteristic Definitions
+   */
   public static MaximumTransmitPower: typeof MaximumTransmitPower;
+  /**
+   * @group Characteristic Definitions
+   */
+  public static MediaAccessControlLevel: typeof MediaAccessControlLevel;
   /**
    * @group Characteristic Definitions
    */
@@ -1193,6 +1213,10 @@ export class Characteristic extends EventEmitter {
   /**
    * @group Characteristic Definitions
    */
+  public static PreferredWiFiList: typeof PreferredWiFiList;
+  /**
+   * @group Characteristic Definitions
+   */
   public static ProductData: typeof ProductData;
   /**
    * @group Characteristic Definitions
@@ -1228,14 +1252,17 @@ export class Characteristic extends EventEmitter {
   public static RelativeHumidityHumidifierThreshold: typeof RelativeHumidityHumidifierThreshold;
   /**
    * @group Characteristic Definitions
+   * @deprecated Removed
    */
   public static RelayControlPoint: typeof RelayControlPoint;
   /**
    * @group Characteristic Definitions
+   * @deprecated Removed
    */
   public static RelayEnabled: typeof RelayEnabled;
   /**
    * @group Characteristic Definitions
+   * @deprecated Removed
    */
   public static RelayState: typeof RelayState;
   /**
@@ -1480,6 +1507,7 @@ export class Characteristic extends EventEmitter {
   public static SwingMode: typeof SwingMode;
   /**
    * @group Characteristic Definitions
+   * @deprecated Removed
    */
   public static TapType: typeof TapType;
   /**
@@ -1572,6 +1600,7 @@ export class Characteristic extends EventEmitter {
   public static ThreadStatus: typeof ThreadStatus;
   /**
    * @group Characteristic Definitions
+   * @deprecated Removed
    */
   public static Token: typeof Token;
   /**
@@ -1580,18 +1609,22 @@ export class Characteristic extends EventEmitter {
   public static TransmitPower: typeof TransmitPower;
   /**
    * @group Characteristic Definitions
+   * @deprecated Removed
    */
   public static TunnelConnectionTimeout: typeof TunnelConnectionTimeout;
   /**
    * @group Characteristic Definitions
+   * @deprecated Removed
    */
   public static TunneledAccessoryAdvertising: typeof TunneledAccessoryAdvertising;
   /**
    * @group Characteristic Definitions
+   * @deprecated Removed
    */
   public static TunneledAccessoryConnected: typeof TunneledAccessoryConnected;
   /**
    * @group Characteristic Definitions
+   * @deprecated Removed
    */
   public static TunneledAccessoryStateNumber: typeof TunneledAccessoryStateNumber;
   /**
@@ -2084,7 +2117,7 @@ export class Characteristic extends EventEmitter {
     try {
       value = this.validateUserInput(value)!;
     } catch (error) {
-      this.characteristicWarning(error?.message + "", CharacteristicWarningType.ERROR_MESSAGE, error?.stack);
+      this.characteristicWarning(error?.message || "Unknown error", CharacteristicWarningType.ERROR_MESSAGE, error?.stack);
       if (callback) {
         callback(error);
       }
@@ -2170,7 +2203,7 @@ export class Characteristic extends EventEmitter {
     try {
       value = this.validateUserInput(value);
     } catch (error) {
-      this.characteristicWarning(error?.message + "", CharacteristicWarningType.ERROR_MESSAGE, error?.stack);
+      this.characteristicWarning(error?.message || "Unknown error", CharacteristicWarningType.ERROR_MESSAGE, error?.stack);
       if (callback) {
         callback();
       }
@@ -2700,9 +2733,9 @@ export class Characteristic extends EventEmitter {
       }
 
       const numericMin = maxWithUndefined(this.props.minValue, numericLowerBound(this.props.format));
-      const numericMax = minWithUndefined(this.props.maxValue, numericUpperBound(this.props.format));
+      let numericMax = minWithUndefined(this.props.maxValue, numericUpperBound(this.props.format));
 
-      let stepValue: number | undefined = undefined;
+      let stepValue: number | undefined;
       if (this.props.format === Formats.FLOAT) {
         stepValue = this.props.minStep;
       } else {
@@ -2711,6 +2744,9 @@ export class Characteristic extends EventEmitter {
 
       if (stepValue != null && stepValue > 0) {
         const minValue = this.props.minValue != null ? this.props.minValue : 0;
+        if (numericMax != null) {
+          numericMax = stepValue * Math.floor((numericMax - minValue) / stepValue) + minValue;
+        }
         value = stepValue * Math.round((value - minValue) / stepValue) + minValue;
       }
 
@@ -2764,10 +2800,6 @@ export class Characteristic extends EventEmitter {
       if (value.length > maxLength) {
         this.characteristicWarning(`characteristic was supplied illegal value: string '${value}' exceeded max length of ${maxLength}`, warningType);
         value = value.substring(0, maxLength);
-      }
-
-      if (value.length > 0 && this.UUID === Characteristic.ConfiguredName.UUID) {
-        checkName(this.displayName, "ConfiguredName", value);
       }
 
       return value;
@@ -2835,7 +2867,6 @@ export class Characteristic extends EventEmitter {
     if (getListeners.length) {
       // the callback can only be called once, so we remove all old listeners
       this.removeAllListeners(CharacteristicEventTypes.GET);
-      // @ts-expect-error: force type
       getListeners.forEach(listener => this.addListener(CharacteristicEventTypes.GET, listener));
     }
 
@@ -2848,7 +2879,6 @@ export class Characteristic extends EventEmitter {
     if (setListeners.length) {
       // the callback can only be called once, so we remove all old listeners
       this.removeAllListeners(CharacteristicEventTypes.SET);
-      // @ts-expect-error: force type
       setListeners.forEach(listener => this.addListener(CharacteristicEventTypes.SET, listener));
     }
 

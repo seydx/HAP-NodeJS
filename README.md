@@ -5,10 +5,10 @@
   
 # HAP-NodeJS
   
-  <a href="https://www.npmjs.com/package/hap-nodejs"><img title="npm version" src="https://badgen.net/npm/v/hap-nodejs" ></a>
-  <a href="https://www.npmjs.com/package/hap-nodejs/v/beta"><img title="npm version beta" src="https://badgen.net/npm/v/hap-nodejs/beta" ></a>
-  <a href="https://www.npmjs.com/package/hap-nodejs/v/alpha"><img title="npm version apha" src="https://badgen.net/npm/v/hap-nodejs/alpha" ></a><br>
-  <a href="https://www.npmjs.com/package/hap-nodejs"><img title="npm downloads" src="https://badgen.net/npm/dt/hap-nodejs" ></a>
+  <a href="https://www.npmjs.com/package/@homebridge/hap-nodejs"><img title="npm version" src="https://shields.io/npm/v/@homebridge/hap-nodejs" ></a>
+  <a href="https://www.npmjs.com/package/@homebridge/hap-nodejs/v/beta"><img title="npm version beta" src="https://shields.io/npm/v/@homebridge/hap-nodejs/beta" ></a>
+  <a href="https://www.npmjs.com/package/@homebridge/hap-nodejs/v/alpha"><img title="npm version alpha" src="https://shields.io/npm/v/@homebridge/hap-nodejs/alpha" ></a><br>
+  <a href="https://www.npmjs.com/package/@homebridge/hap-nodejs"><img title="npm downloads" src="https://shields.io/npm/dt/@homebridge/hap-nodejs" ></a>
   <a href="https://github.com/homebridge/HAP-NodeJS/actions/workflows/build.yml"><img title="Node Build" src="https://github.com/homebridge/HAP-NodeJS/actions/workflows/build.yml/badge.svg" ></a>
   <a href='https://coveralls.io/github/homebridge/HAP-NodeJS'><img src='https://coveralls.io/repos/github/homebridge/HAP-NodeJS/badge.svg' alt='Coverage Status' /></a>
 
@@ -39,8 +39,6 @@ The documentation (WIP) can be found [here](https://developers.homebridge.io/HAP
 
 See the FAQ on how to enable [debug output][faq-debug] for HAP-NodeJS.
 
-If you wish to do a contribution please read through our [CONTRIBUTING][contributing] guide.
-
 ## Projects based on HAP-NodeJS
 
 - [Homebridge][project-homebridge] - HomeKit support for the impatient - Pluggable HomeKit Bridge.  
@@ -70,10 +68,9 @@ If you are interested in HAP over BTLE, you might want to check [this][link-hap-
 [hk-terminology]: https://github.com/homebridge/HAP-NodeJS/wiki/HomeKit-Terminology
 [dev-guide]: https://github.com/homebridge/HAP-NodeJS/wiki/Using-HAP-NodeJS-as-a-library
 [faq-debug]: https://github.com/homebridge/HAP-NodeJS/wiki/FAQ#debug-mode
-[contributing]: https://github.com/homebridge/HAP-NodeJS/blob/master/CONTRIBUTING.md
 
 [examples-repo]: https://github.com/homebridge/HAP-NodeJS-examples
-[example-accessories]: https://github.com/homebridge/HAP-NodeJS/tree/master/src/accessories
+[example-accessories]: https://github.com/homebridge/HAP-NodeJS/tree/latest/src/accessories
 
 [project-homebridge]: https://github.com/homebridge/homebridge
 [project-openhab-homekit-bridge]: https://github.com/htreu/OpenHAB-HomeKit-Bridge

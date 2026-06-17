@@ -1,8 +1,9 @@
 import axios, { AxiosError, AxiosResponse } from "axios";
 import crypto from "crypto";
+import createDebug from "debug";
 import { Agent } from "http";
 import tweetnacl from "tweetnacl";
-import { PairingStates, TLVValues } from "../internal-types";
+import { PairingStates, PairMethods, TLVValues } from "../internal-types";
 import { HAPHTTPClient } from "../test-utils/HAPHTTPClient";
 import { PairSetupClient } from "../test-utils/PairSetupClient";
 import { PairVerifyClient } from "../test-utils/PairVerifyClient";
@@ -30,6 +31,7 @@ import {
 import { AccessoryInfo, PairingInformation, PermissionTypes } from "./model/AccessoryInfo";
 import { Service } from "./Service";
 import { HAPConnection, HAPEncryption } from "./util/eventedhttp";
+import * as hapCrypto from "./util/hapCrypto";
 import { awaitEventOnce, PromiseTimeout } from "./util/promise-utils";
 import * as tlv from "./util/tlv";
 
@@ -72,7 +74,7 @@ describe("HAPServer", () => {
     accessoryInfoUnpaired.displayName = "Outlet";
     accessoryInfoUnpaired.category = 7;
     accessoryInfoUnpaired.pincode = " 031-45-154";
-    serverInfoUnpaired.publicKey = accessoryInfoUnpaired.signPk;
+    serverInfoUnpaired.publicKey = Buffer.from(accessoryInfoUnpaired.signPk);
 
     accessoryInfoPaired = AccessoryInfo.create(serverUsername);
     // @ts-expect-error: private access
@@ -80,7 +82,7 @@ describe("HAPServer", () => {
     accessoryInfoPaired.displayName = "Outlet";
     accessoryInfoPaired.category = 7;
     accessoryInfoPaired.pincode = " 031-45-154";
-    serverInfoPaired.publicKey = accessoryInfoPaired.signPk;
+    serverInfoPaired.publicKey = Buffer.from(accessoryInfoPaired.signPk);
 
     const clientKeyPair = tweetnacl.sign.keyPair();
     clientInfo.privateKey = Buffer.from(clientKeyPair.secretKey);
@@ -232,6 +234,489 @@ describe("HAPServer", () => {
     expect(objectsM4[TLVValues.ERROR_CODE].readUInt8(0)).toEqual(TLVErrorCode.AUTHENTICATION);
   });
 
+  describe("encrypted data length validation (fix 0719059b)", () => {
+    test("/pair-setup M5 should reject when ENCRYPTED_DATA is missing", async () => {
+      server = new HAPServer(accessoryInfoUnpaired);
+      const [port] = await bindServer(server);
+
+      const pairSetup = new PairSetupClient(port, httpAgent);
+
+      // advance the connection state to M4 via real SRP M1 + M3
+      const responseM1 = await pairSetup.sendM1();
+      const M2 = pairSetup.parseM2(responseM1.data);
+      const M3 = await pairSetup.prepareM3(M2, accessoryInfoUnpaired.pincode);
+      const responseM3 = await pairSetup.sendM3(M3);
+      pairSetup.parseM4(responseM3.data, M3);
+
+      // craft an M5 with no ENCRYPTED_DATA TLV
+      const response = await axios.post(
+        `http://localhost:${port}/pair-setup`,
+        tlv.encode(TLVValues.STATE, PairingStates.M5),
+        { httpAgent, responseType: "arraybuffer" },
+      );
+
+      const objects = tlv.decode(response.data);
+      expect(objects[TLVValues.STATE].readUInt8(0)).toEqual(PairingStates.M4);
+      expect(objects[TLVValues.ERROR_CODE].readUInt8(0)).toEqual(TLVErrorCode.AUTHENTICATION);
+    });
+
+    test("/pair-setup M5 should reject when ENCRYPTED_DATA is shorter than the auth tag (16 bytes)", async () => {
+      server = new HAPServer(accessoryInfoUnpaired);
+      const [port] = await bindServer(server);
+
+      const pairSetup = new PairSetupClient(port, httpAgent);
+      const responseM1 = await pairSetup.sendM1();
+      const M2 = pairSetup.parseM2(responseM1.data);
+      const M3 = await pairSetup.prepareM3(M2, accessoryInfoUnpaired.pincode);
+      const responseM3 = await pairSetup.sendM3(M3);
+      pairSetup.parseM4(responseM3.data, M3);
+
+      // 8 bytes is below the 16-byte minimum; without the guard this would underflow Buffer.alloc()
+      const response = await axios.post(
+        `http://localhost:${port}/pair-setup`,
+        tlv.encode(
+          TLVValues.STATE, PairingStates.M5,
+          TLVValues.ENCRYPTED_DATA, Buffer.alloc(8),
+        ),
+        { httpAgent, responseType: "arraybuffer" },
+      );
+
+      const objects = tlv.decode(response.data);
+      expect(objects[TLVValues.STATE].readUInt8(0)).toEqual(PairingStates.M4);
+      expect(objects[TLVValues.ERROR_CODE].readUInt8(0)).toEqual(TLVErrorCode.AUTHENTICATION);
+    });
+
+    test("/pair-verify M3 should reject when ENCRYPTED_DATA is missing", async () => {
+      server = new HAPServer(accessoryInfoPaired);
+      const [port] = await bindServer(server);
+
+      const pairVerify = new PairVerifyClient(port, httpAgent);
+      // advance connection state to M2 via M1
+      const responseM1 = await pairVerify.sendM1();
+      pairVerify.parseM2(responseM1.data, serverInfoPaired);
+
+      const response = await axios.post(
+        `http://localhost:${port}/pair-verify`,
+        tlv.encode(TLVValues.STATE, PairingStates.M3),
+        { httpAgent, responseType: "arraybuffer" },
+      );
+
+      const objects = tlv.decode(response.data);
+      expect(objects[TLVValues.STATE].readUInt8(0)).toEqual(PairingStates.M4);
+      expect(objects[TLVValues.ERROR_CODE].readUInt8(0)).toEqual(TLVErrorCode.AUTHENTICATION);
+    });
+
+    test("/pair-verify M3 should reject when ENCRYPTED_DATA is shorter than the auth tag (16 bytes)", async () => {
+      server = new HAPServer(accessoryInfoPaired);
+      const [port] = await bindServer(server);
+
+      const pairVerify = new PairVerifyClient(port, httpAgent);
+      const responseM1 = await pairVerify.sendM1();
+      pairVerify.parseM2(responseM1.data, serverInfoPaired);
+
+      const response = await axios.post(
+        `http://localhost:${port}/pair-verify`,
+        tlv.encode(
+          TLVValues.STATE, PairingStates.M3,
+          TLVValues.ENCRYPTED_DATA, Buffer.alloc(15),
+        ),
+        { httpAgent, responseType: "arraybuffer" },
+      );
+
+      const objects = tlv.decode(response.data);
+      expect(objects[TLVValues.STATE].readUInt8(0)).toEqual(PairingStates.M4);
+      expect(objects[TLVValues.ERROR_CODE].readUInt8(0)).toEqual(TLVErrorCode.AUTHENTICATION);
+    });
+  });
+
+  describe("constant-time pincode comparison (fix 12aea013)", () => {
+    test("PUT /characteristics with no authorization header should be rejected", async () => {
+      server = new HAPServer(accessoryInfoUnpaired);
+      server.allowInsecureRequest = true;
+      const [port] = await bindServer(server);
+
+      try {
+        await axios.put(
+          `http://localhost:${port}/characteristics`,
+          { characteristics: [{ aid: 1, iid: 9, value: true }] },
+          { httpAgent },
+        );
+        fail("Expected CONNECTION_AUTHORIZATION_REQUIRED response");
+      } catch (error) {
+        expect(error).toBeInstanceOf(AxiosError);
+        expect(error.response?.status).toBe(HAPPairingHTTPCode.CONNECTION_AUTHORIZATION_REQUIRED);
+        expect(error.response?.data).toEqual({ status: HAPStatus.INSUFFICIENT_PRIVILEGES });
+      }
+    });
+
+    test("PUT /characteristics with wrong-length authorization should not crash timingSafeEqual", async () => {
+      server = new HAPServer(accessoryInfoUnpaired);
+      server.allowInsecureRequest = true;
+      const [port] = await bindServer(server);
+
+      // 5 bytes — different length to the 11-byte pincode. Without the
+      // length guard added in 12aea013, crypto.timingSafeEqual throws
+      // RangeError and the connection would be killed.
+      try {
+        await axios.put(
+          `http://localhost:${port}/characteristics`,
+          { characteristics: [{ aid: 1, iid: 9, value: true }] },
+          { httpAgent, headers: { authorization: "short" } },
+        );
+        fail("Expected CONNECTION_AUTHORIZATION_REQUIRED response");
+      } catch (error) {
+        expect(error).toBeInstanceOf(AxiosError);
+        expect(error.response?.status).toBe(HAPPairingHTTPCode.CONNECTION_AUTHORIZATION_REQUIRED);
+      }
+    });
+
+    test("PUT /characteristics with same-length wrong pincode should be rejected", async () => {
+      // use a pincode without leading whitespace — node's HTTP parser trims
+      // header values, so the fixture's " 031-45-154" can't round-trip and
+      // any wrong value with the same leading space hits the wrong-length
+      // branch on the server, not the constant-time same-length comparison.
+      const info = AccessoryInfo.create(serverUsername);
+      // @ts-expect-error: private access
+      info.setupID = Accessory._generateSetupID();
+      info.displayName = "Outlet";
+      info.category = 7;
+      info.pincode = "031-45-154";
+
+      server = new HAPServer(info);
+      server.allowInsecureRequest = true;
+      const [port] = await bindServer(server);
+
+      const wrongPincode = "999-99-999"; // same length as "031-45-154", different content
+      try {
+        await axios.put(
+          `http://localhost:${port}/characteristics`,
+          { characteristics: [{ aid: 1, iid: 9, value: true }] },
+          { httpAgent, headers: { authorization: wrongPincode } },
+        );
+        fail("Expected CONNECTION_AUTHORIZATION_REQUIRED response");
+      } catch (error) {
+        expect(error).toBeInstanceOf(AxiosError);
+        expect(error.response?.status).toBe(HAPPairingHTTPCode.CONNECTION_AUTHORIZATION_REQUIRED);
+      }
+    });
+
+    test("PUT /characteristics with correct pincode should be authorized", async () => {
+      // use a pincode without leading whitespace — HTTP header values get trimmed
+      // by node's parser so the global test fixture's " 031-45-154" can't round-trip.
+      const info = AccessoryInfo.create(serverUsername);
+      // @ts-expect-error: private access
+      info.setupID = Accessory._generateSetupID();
+      info.displayName = "Outlet";
+      info.category = 7;
+      info.pincode = "031-45-154";
+
+      server = new HAPServer(info);
+      server.allowInsecureRequest = true;
+      const [port] = await bindServer(server);
+
+      server.on(HAPServerEventTypes.SET_CHARACTERISTICS, (connection, writeRequest, callback) => {
+        callback(undefined, { characteristics: writeRequest.characteristics.map(c => ({ aid: c.aid, iid: c.iid, status: HAPStatus.SUCCESS })) });
+      });
+
+      const response = await axios.put(
+        `http://localhost:${port}/characteristics`,
+        { characteristics: [{ aid: 1, iid: 9, value: true }] },
+        { httpAgent, headers: { authorization: info.pincode } },
+      );
+      // a successful insecure PUT returns 204 NO_CONTENT (or 200 if there's a response body)
+      expect(response.status).toBeGreaterThanOrEqual(200);
+      expect(response.status).toBeLessThan(300);
+    });
+
+    test("POST /resource with wrong-length authorization should not crash timingSafeEqual", async () => {
+      server = new HAPServer(accessoryInfoUnpaired);
+      server.allowInsecureRequest = true;
+      const [port] = await bindServer(server);
+
+      try {
+        await axios.post(
+          `http://localhost:${port}/resource`,
+          { "resource-type": "image", "image-width": 100, "image-height": 100 },
+          { httpAgent, headers: { authorization: "short" } },
+        );
+        fail("Expected CONNECTION_AUTHORIZATION_REQUIRED response");
+      } catch (error) {
+        expect(error).toBeInstanceOf(AxiosError);
+        expect(error.response?.status).toBe(HAPPairingHTTPCode.CONNECTION_AUTHORIZATION_REQUIRED);
+        expect(error.response?.data).toEqual({ status: HAPStatus.INSUFFICIENT_PRIVILEGES });
+      }
+    });
+  });
+
+  describe("error argument in pairing debug logs (fix f12ed233)", () => {
+    let originalEnable: string;
+    let originalLog: (...args: unknown[]) => void;
+    let captured: unknown[][];
+
+    beforeEach(() => {
+      captured = [];
+      // createDebug.disable() returns the namespaces it just disabled, so we
+      // can faithfully restore them via createDebug.enable() in afterEach.
+      originalEnable = createDebug.disable();
+      // route all enabled debug output through our capture function
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      originalLog = (createDebug as any).log;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (createDebug as any).log = function(this: { namespace: string }, ...args: unknown[]) {
+        captured.push([this.namespace, ...args]);
+      };
+      createDebug.enable("HAP-NodeJS:HAPServer");
+    });
+
+    afterEach(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (createDebug as any).log = originalLog;
+      createDebug.disable();
+      if (originalEnable) {
+        createDebug.enable(originalEnable);
+      }
+    });
+
+    test("M5 decrypt failure should pass the error to the debug logger", async () => {
+      server = new HAPServer(accessoryInfoUnpaired);
+      const [port] = await bindServer(server);
+
+      const pairSetup = new PairSetupClient(port, httpAgent);
+      const responseM1 = await pairSetup.sendM1();
+      const M2 = pairSetup.parseM2(responseM1.data);
+      const M3 = await pairSetup.prepareM3(M2, accessoryInfoUnpaired.pincode);
+      const responseM3 = await pairSetup.sendM3(M3);
+      pairSetup.parseM4(responseM3.data, M3);
+
+      // craft an M5 with bogus ciphertext+tag (passes the >=16 length check
+      // from 0719059b but fails MAC verification)
+      await axios.post(
+        `http://localhost:${port}/pair-setup`,
+        tlv.encode(
+          TLVValues.STATE, PairingStates.M5,
+          TLVValues.ENCRYPTED_DATA, Buffer.alloc(48), // 32-byte payload + 16-byte tag, all zeros
+        ),
+        { httpAgent, responseType: "arraybuffer" },
+      );
+
+      // captured rows: [namespace, formatString, ...formatArgs]
+      const m5Lines = captured.filter(line => typeof line[1] === "string"
+        && (line[1] as string).includes("Error while decrypting and verifying M5 subTlv"));
+      expect(m5Lines.length).toBeGreaterThan(0);
+
+      // the format string contains two %s — the first is the username, the
+      // second is the error. Without the fix only the username was passed.
+      const line = m5Lines[0];
+      expect(line[2]).toBe(accessoryInfoUnpaired.username);
+      // line[3] should be the error caught from decipher.final() — the
+      // exact constructor varies by Node version / openssl binding, so
+      // just assert it's a thrown error-like object with a message.
+      expect(line[3]).toBeDefined();
+      expect((line[3] as Error).message).toEqual(expect.any(String));
+    });
+
+    test("pair-verify M3 decrypt failure should pass the error to the debug logger", async () => {
+      server = new HAPServer(accessoryInfoPaired);
+      const [port] = await bindServer(server);
+
+      const pairVerify = new PairVerifyClient(port, httpAgent);
+      const responseM1 = await pairVerify.sendM1();
+      pairVerify.parseM2(responseM1.data, serverInfoPaired);
+
+      await axios.post(
+        `http://localhost:${port}/pair-verify`,
+        tlv.encode(
+          TLVValues.STATE, PairingStates.M3,
+          TLVValues.ENCRYPTED_DATA, Buffer.alloc(48),
+        ),
+        { httpAgent, responseType: "arraybuffer" },
+      );
+
+      const m3Lines = captured.filter(line => typeof line[1] === "string"
+        && (line[1] as string).includes("M3: Failed to decrypt and/or verify"));
+      expect(m3Lines.length).toBeGreaterThan(0);
+      const line = m3Lines[0];
+      expect(line[2]).toBe(accessoryInfoPaired.username);
+      // line[3] should be the error caught from decipher.final() — the
+      // exact constructor varies by Node version / openssl binding, so
+      // just assert it's a thrown error-like object with a message.
+      expect(line[3]).toBeDefined();
+      expect((line[3] as Error).message).toEqual(expect.any(String));
+    });
+  });
+
+  describe("M1 reset prevention (fix d4c81be0)", () => {
+    test("/pair-setup should reject a second M1 on a connection with in-progress state", async () => {
+      server = new HAPServer(accessoryInfoUnpaired);
+      const [port] = await bindServer(server);
+
+      const pairSetup = new PairSetupClient(port, httpAgent);
+
+      // first M1 succeeds → connection state advances to M2
+      const firstResponse = await pairSetup.sendM1();
+      const firstObjects = tlv.decode(firstResponse.data);
+      expect(firstObjects[TLVValues.STATE].readUInt8(0)).toEqual(PairingStates.M2);
+      expect(firstObjects[TLVValues.ERROR_CODE]).toBeUndefined();
+
+      // second M1 on the same connection — without the guard this would
+      // restart pair-setup and overwrite the in-progress SRP server
+      try {
+        await pairSetup.sendM1();
+        fail("Expected BAD_REQUEST response");
+      } catch (error) {
+        expect(error).toBeInstanceOf(AxiosError);
+        expect(error.response?.status).toBe(HAPHTTPCode.BAD_REQUEST);
+        const objects = tlv.decode(error.response?.data);
+        // sequence + 1 = M2; UNKNOWN error
+        expect(objects[TLVValues.STATE].readUInt8(0)).toEqual(PairingStates.M2);
+        expect(objects[TLVValues.ERROR_CODE].readUInt8(0)).toEqual(TLVErrorCode.UNKNOWN);
+      }
+    });
+
+    test("/pair-setup should still accept M1 on a fresh connection after a previous setup completed", async () => {
+      server = new HAPServer(accessoryInfoUnpaired);
+      const [port] = await bindServer(server);
+
+      // first connection: do an M1 and abort
+      const firstAgent = new Agent({ keepAlive: true });
+      const firstClient = new PairSetupClient(port, firstAgent);
+      await firstClient.sendM1();
+      firstAgent.destroy();
+
+      // second connection: a fresh M1 should still succeed (no state pollution)
+      const secondAgent = new Agent({ keepAlive: true });
+      try {
+        const secondClient = new PairSetupClient(port, secondAgent);
+        const response = await secondClient.sendM1();
+        const objects = tlv.decode(response.data);
+        expect(objects[TLVValues.STATE].readUInt8(0)).toEqual(PairingStates.M2);
+        expect(objects[TLVValues.ERROR_CODE]).toBeUndefined();
+      } finally {
+        secondAgent.destroy();
+      }
+    });
+  });
+
+  describe("SEQUENCE_NUM check in pair handlers (fix ebe2ec67)", () => {
+    test("/pair-setup should reject when SEQUENCE_NUM TLV is missing", async () => {
+      server = new HAPServer(accessoryInfoUnpaired);
+      const [port] = await bindServer(server);
+
+      // a TLV containing only METHOD (no SEQUENCE_NUM/STATE) — without the
+      // guard this would crash on `tlvData[SEQUENCE_NUM][0]` of `undefined`.
+      try {
+        await axios.post(
+          `http://localhost:${port}/pair-setup`,
+          tlv.encode(TLVValues.METHOD, PairMethods.PAIR_SETUP),
+          { httpAgent, responseType: "arraybuffer" },
+        );
+        fail("Expected BAD_REQUEST response");
+      } catch (error) {
+        expect(error).toBeInstanceOf(AxiosError);
+        expect(error.response?.status).toBe(HAPHTTPCode.BAD_REQUEST);
+        const objects = tlv.decode(error.response?.data);
+        expect(objects[TLVValues.STATE].readUInt8(0)).toEqual(PairingStates.M2);
+        expect(objects[TLVValues.ERROR_CODE].readUInt8(0)).toEqual(TLVErrorCode.UNKNOWN);
+      }
+    });
+
+    test("/pair-verify should reject when SEQUENCE_NUM TLV is missing", async () => {
+      server = new HAPServer(accessoryInfoPaired);
+      const [port] = await bindServer(server);
+
+      try {
+        await axios.post(
+          `http://localhost:${port}/pair-verify`,
+          tlv.encode(TLVValues.PUBLIC_KEY, Buffer.alloc(32)),
+          { httpAgent, responseType: "arraybuffer" },
+        );
+        fail("Expected BAD_REQUEST response");
+      } catch (error) {
+        expect(error).toBeInstanceOf(AxiosError);
+        expect(error.response?.status).toBe(HAPHTTPCode.BAD_REQUEST);
+        const objects = tlv.decode(error.response?.data);
+        expect(objects[TLVValues.STATE].readUInt8(0)).toEqual(PairingStates.M2);
+        expect(objects[TLVValues.ERROR_CODE].readUInt8(0)).toEqual(TLVErrorCode.UNKNOWN);
+      }
+    });
+  });
+
+  describe("required TLV fields validation in pairing handlers (fix 58c24b92)", () => {
+    test("/pair-setup M5 should reject when decrypted payload is missing IDENTIFIER", async () => {
+      server = new HAPServer(accessoryInfoUnpaired);
+      const [port] = await bindServer(server);
+
+      const pairSetup = new PairSetupClient(port, httpAgent);
+
+      const responseM1 = await pairSetup.sendM1();
+      const M2 = pairSetup.parseM2(responseM1.data);
+      const M3 = await pairSetup.prepareM3(M2, accessoryInfoUnpaired.pincode);
+      const responseM3 = await pairSetup.sendM3(M3);
+      const M4 = pairSetup.parseM4(responseM3.data, M3);
+
+      // build a sub-TLV missing IDENTIFIER (only PUBLIC_KEY + SIGNATURE)
+      const malformedSubTLV = tlv.encode(
+        TLVValues.PUBLIC_KEY, clientInfo.publicKey,
+        TLVValues.SIGNATURE, Buffer.alloc(64),
+      );
+
+      const sessionKey = hapCrypto.HKDF(
+        "sha512",
+        Buffer.from("Pair-Setup-Encrypt-Salt"),
+        M4.sharedSecret,
+        Buffer.from("Pair-Setup-Encrypt-Info"),
+        32,
+      );
+      const encrypted = hapCrypto.chacha20_poly1305_encryptAndSeal(
+        sessionKey, Buffer.from("PS-Msg05"), null, malformedSubTLV,
+      );
+
+      const response = await axios.post(
+        `http://localhost:${port}/pair-setup`,
+        tlv.encode(
+          TLVValues.STATE, PairingStates.M5,
+          TLVValues.ENCRYPTED_DATA, Buffer.concat([encrypted.ciphertext, encrypted.authTag]),
+        ),
+        { httpAgent, responseType: "arraybuffer" },
+      );
+
+      const objects = tlv.decode(response.data);
+      expect(objects[TLVValues.STATE].readUInt8(0)).toEqual(PairingStates.M4);
+      expect(objects[TLVValues.ERROR_CODE].readUInt8(0)).toEqual(TLVErrorCode.UNKNOWN);
+    });
+
+    test("/pair-verify M3 should reject when decrypted payload is missing PROOF", async () => {
+      server = new HAPServer(accessoryInfoPaired);
+      const [port] = await bindServer(server);
+
+      const pairVerify = new PairVerifyClient(port, httpAgent);
+      const responseM1 = await pairVerify.sendM1();
+      const M2 = pairVerify.parseM2(responseM1.data, serverInfoPaired);
+
+      // build a sub-TLV missing PROOF/SIGNATURE (only IDENTIFIER)
+      const malformedSubTLV = tlv.encode(
+        TLVValues.IDENTIFIER, Buffer.from(clientInfo.username),
+      );
+
+      const encrypted = hapCrypto.chacha20_poly1305_encryptAndSeal(
+        M2.sessionKey, Buffer.from("PV-Msg03"), null, malformedSubTLV,
+      );
+
+      const response = await axios.post(
+        `http://localhost:${port}/pair-verify`,
+        tlv.encode(
+          TLVValues.STATE, PairingStates.M3,
+          TLVValues.ENCRYPTED_DATA, Buffer.concat([encrypted.ciphertext, encrypted.authTag]),
+        ),
+        { httpAgent, responseType: "arraybuffer" },
+      );
+
+      const objects = tlv.decode(response.data);
+      expect(objects[TLVValues.STATE].readUInt8(0)).toEqual(PairingStates.M4);
+      expect(objects[TLVValues.ERROR_CODE].readUInt8(0)).toEqual(TLVErrorCode.UNKNOWN);
+    });
+  });
+
   describe("tests with paired and pair-verified connection", () => {
     let port: number;
     let address: string;
@@ -302,6 +787,88 @@ describe("HAPServer", () => {
 
       const response = await client.sendListPairingsRequest();
       expect(response).toEqual(list);
+    });
+
+    describe("/pairings required TLV fields (fix 58c24b92)", () => {
+      test("should reject when METHOD is missing", async () => {
+        const malformed = tlv.encode(TLVValues.STATE, PairingStates.M1);
+        const httpResponse = await client.writeHTTPRequest("POST", "/pairings", malformed, "application/pairing+tlv8");
+        expect(httpResponse.statusCode).toEqual(HAPPairingHTTPCode.OK);
+        const objects = tlv.decode(httpResponse.body);
+        expect(objects[TLVValues.STATE].readUInt8(0)).toEqual(PairingStates.M2);
+        expect(objects[TLVValues.ERROR_CODE].readUInt8(0)).toEqual(TLVErrorCode.UNKNOWN);
+      });
+
+      test("should reject when STATE is missing", async () => {
+        const malformed = tlv.encode(TLVValues.METHOD, PairMethods.LIST_PAIRINGS);
+        const httpResponse = await client.writeHTTPRequest("POST", "/pairings", malformed, "application/pairing+tlv8");
+        expect(httpResponse.statusCode).toEqual(HAPPairingHTTPCode.OK);
+        const objects = tlv.decode(httpResponse.body);
+        expect(objects[TLVValues.STATE].readUInt8(0)).toEqual(PairingStates.M2);
+        expect(objects[TLVValues.ERROR_CODE].readUInt8(0)).toEqual(TLVErrorCode.UNKNOWN);
+      });
+
+      test("ADD_PAIRING should reject when IDENTIFIER is missing", async () => {
+        const malformed = tlv.encode(
+          TLVValues.METHOD, PairMethods.ADD_PAIRING,
+          TLVValues.STATE, PairingStates.M1,
+          TLVValues.PUBLIC_KEY, crypto.randomBytes(32),
+          TLVValues.PERMISSIONS, PermissionTypes.ADMIN,
+        );
+        const httpResponse = await client.writeHTTPRequest("POST", "/pairings", malformed, "application/pairing+tlv8");
+        const objects = tlv.decode(httpResponse.body);
+        expect(objects[TLVValues.STATE].readUInt8(0)).toEqual(PairingStates.M2);
+        expect(objects[TLVValues.ERROR_CODE].readUInt8(0)).toEqual(TLVErrorCode.UNKNOWN);
+      });
+
+      test("ADD_PAIRING should reject when PUBLIC_KEY is missing", async () => {
+        const malformed = tlv.encode(
+          TLVValues.METHOD, PairMethods.ADD_PAIRING,
+          TLVValues.STATE, PairingStates.M1,
+          TLVValues.IDENTIFIER, thirdUsername,
+          TLVValues.PERMISSIONS, PermissionTypes.ADMIN,
+        );
+        const httpResponse = await client.writeHTTPRequest("POST", "/pairings", malformed, "application/pairing+tlv8");
+        const objects = tlv.decode(httpResponse.body);
+        expect(objects[TLVValues.STATE].readUInt8(0)).toEqual(PairingStates.M2);
+        expect(objects[TLVValues.ERROR_CODE].readUInt8(0)).toEqual(TLVErrorCode.UNKNOWN);
+      });
+
+      test("REMOVE_PAIRING should reject when IDENTIFIER is missing", async () => {
+        const malformed = tlv.encode(
+          TLVValues.METHOD, PairMethods.REMOVE_PAIRING,
+          TLVValues.STATE, PairingStates.M1,
+        );
+        const httpResponse = await client.writeHTTPRequest("POST", "/pairings", malformed, "application/pairing+tlv8");
+        const objects = tlv.decode(httpResponse.body);
+        expect(objects[TLVValues.STATE].readUInt8(0)).toEqual(PairingStates.M2);
+        expect(objects[TLVValues.ERROR_CODE].readUInt8(0)).toEqual(TLVErrorCode.UNKNOWN);
+      });
+    });
+
+    describe("GET /characteristics aid.iid format validation (fix ec93c504)", () => {
+      test.each([
+        ["non-numeric aid", "abc.5"],
+        ["non-numeric iid", "1.xyz"],
+        ["missing dot", "1"],
+        ["too many dots", "1.2.3"],
+        ["empty parts", "."],
+        ["empty aid", ".5"],
+        ["empty iid", "1."],
+        ["whitespace", "1. 5"],
+      ])("should reject id=%s (%s) with INVALID_VALUE_IN_REQUEST", async (_label, idValue) => {
+        const httpResponse = await client.writeHTTPRequest("GET", `/characteristics?id=${encodeURIComponent(idValue)}`);
+        expect(httpResponse.statusCode).toBe(HAPHTTPCode.BAD_REQUEST);
+        const body = JSON.parse(httpResponse.body.toString());
+        expect(body.status).toBe(HAPStatus.INVALID_VALUE_IN_REQUEST);
+      });
+
+      test("should reject when one entry in a comma-separated list is malformed", async () => {
+        const httpResponse = await client.writeHTTPRequest("GET", "/characteristics?id=1.5,abc.def");
+        expect(httpResponse.statusCode).toBe(HAPHTTPCode.BAD_REQUEST);
+        const body = JSON.parse(httpResponse.body.toString());
+        expect(body.status).toBe(HAPStatus.INVALID_VALUE_IN_REQUEST);
+      });
     });
 
     test("test /accessories", async () => {
@@ -618,10 +1185,6 @@ describe(IsKnownHAPStatusError, () => {
       .filter(error => error !== 0); // filter out HAPStatus.SUCCESS
 
     for (const error of errorValues) {
-      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-      // @ts-ignore:next-line - This was @ts-expect-error: type mismatch, but it triggered build errors 
-      // Summary of all failing tests  src/lib/HAPServer.spec.ts:621:7 - error TS2578: Unused '@ts-expect-error' directive.
-
       const result = IsKnownHAPStatusError(error);
       if (!result) {
         fail("IsKnownHAPStatusError does not return true for error code " + error);

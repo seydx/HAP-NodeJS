@@ -327,9 +327,6 @@ export interface AdaptiveLightingControllerUpdate {
   notifyIntervalThreshold: number;
 }
 
-/**
- * @group Adaptive Lighting
- */
 // eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
 export declare interface AdaptiveLightingController {
   /**

@@ -261,9 +261,6 @@ export const enum HAPServerEventTypes {
   CONNECTION_CLOSED = "connection-closed",
 }
 
-/**
- * @group HAP Accessory Server
- */
 // eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
 export declare interface HAPServer {
   on(event: "listening", listener: (port: number, address: string) => void): this;
@@ -490,9 +487,22 @@ export class HAPServer extends EventEmitter {
       return;
     }
 
-    const tlvData = tlv.decode(data);
+    let tlvData: Record<number, Buffer>;
+    try {
+      tlvData = tlv.decode(data);
+    } catch (error) {
+      debug("[%s] Pair-Setup: failed to decode TLV request: %s", this.accessoryInfo.username, error.message);
+      response.writeHead(HAPPairingHTTPCode.BAD_REQUEST, { "Content-Type": "application/pairing+tlv8" });
+      response.end(tlv.encode(TLVValues.STATE, PairingStates.M2, TLVValues.ERROR_CODE, TLVErrorCode.UNKNOWN));
+      return;
+    }
+    if (!tlvData[TLVValues.SEQUENCE_NUM]) {
+      response.writeHead(HAPPairingHTTPCode.BAD_REQUEST, { "Content-Type": "application/pairing+tlv8" });
+      response.end(tlv.encode(TLVValues.STATE, PairingStates.M2, TLVValues.ERROR_CODE, TLVErrorCode.UNKNOWN));
+      return;
+    }
     const sequence = tlvData[TLVValues.SEQUENCE_NUM][0]; // value is single byte with sequence number
-    if (sequence === PairingStates.M1) {
+    if (sequence === PairingStates.M1 && !connection._pairSetupState) {
       this.handlePairSetupM1(connection, request, response);
     } else if (sequence === PairingStates.M3 && connection._pairSetupState === PairingStates.M2) {
       this.handlePairSetupM3(connection, request, response, tlvData);
@@ -558,6 +568,13 @@ export class HAPServer extends EventEmitter {
     // pull the SRP server we created in stepOne out of the current session
     const srpServer = connection.srpServer!;
     const encryptedData = tlvData[TLVValues.ENCRYPTED_DATA];
+    if (!encryptedData || encryptedData.length < 16) {
+      debug("[%s] M5: Encrypted data missing or too short", this.accessoryInfo.username);
+      response.writeHead(HAPPairingHTTPCode.OK, { "Content-Type": "application/pairing+tlv8" });
+      response.end(tlv.encode(TLVValues.SEQUENCE_NUM, PairingStates.M4, TLVValues.ERROR_CODE, TLVErrorCode.AUTHENTICATION));
+      connection._pairSetupState = undefined;
+      return;
+    }
     const messageData = Buffer.alloc(encryptedData.length - 16);
     const authTagData = Buffer.alloc(16);
     encryptedData.copy(messageData, 0, 0, encryptedData.length - 16);
@@ -570,19 +587,34 @@ export class HAPServer extends EventEmitter {
     let plaintext;
     try {
       plaintext = hapCrypto.chacha20_poly1305_decryptAndVerify(outputKey, Buffer.from("PS-Msg05"), null, messageData, authTagData);
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     } catch (error) {
-      debug("[%s] Error while decrypting and verifying M5 subTlv: %s", this.accessoryInfo.username);
+      debug("[%s] Error while decrypting and verifying M5 subTlv: %s", this.accessoryInfo.username, error);
       response.writeHead(HAPPairingHTTPCode.OK, { "Content-Type": "application/pairing+tlv8" });
       response.end(tlv.encode(TLVValues.SEQUENCE_NUM, PairingStates.M4, TLVValues.ERROR_CODE, TLVErrorCode.AUTHENTICATION));
       connection._pairSetupState = undefined;
       return;
     }
     // decode the client payload and pass it on to the next step
-    const M5Packet = tlv.decode(plaintext);
+    let M5Packet: Record<number, Buffer>;
+    try {
+      M5Packet = tlv.decode(plaintext);
+    } catch (error) {
+      debug("[%s] M5: Failed to decode decrypted TLV payload: %s", this.accessoryInfo.username, error.message);
+      response.writeHead(HAPPairingHTTPCode.OK, { "Content-Type": "application/pairing+tlv8" });
+      response.end(tlv.encode(TLVValues.SEQUENCE_NUM, PairingStates.M4, TLVValues.ERROR_CODE, TLVErrorCode.UNKNOWN));
+      connection._pairSetupState = undefined;
+      return;
+    }
     const clientUsername = M5Packet[TLVValues.USERNAME];
     const clientLTPK = M5Packet[TLVValues.PUBLIC_KEY];
     const clientProof = M5Packet[TLVValues.PROOF];
+    if (!clientUsername || !clientLTPK || !clientProof) {
+      debug("[%s] M5: Missing required TLV fields in decrypted payload", this.accessoryInfo.username);
+      response.writeHead(HAPPairingHTTPCode.OK, { "Content-Type": "application/pairing+tlv8" });
+      response.end(tlv.encode(TLVValues.SEQUENCE_NUM, PairingStates.M4, TLVValues.ERROR_CODE, TLVErrorCode.UNKNOWN));
+      connection._pairSetupState = undefined;
+      return;
+    }
     this.handlePairSetupM5_2(connection, request, response, clientUsername, clientLTPK, clientProof, outputKey);
   }
 
@@ -652,7 +684,20 @@ export class HAPServer extends EventEmitter {
   }
 
   private handlePairVerify(connection: HAPConnection, url: URL, request: IncomingMessage, data: Buffer, response: ServerResponse): void {
-    const tlvData = tlv.decode(data);
+    let tlvData: Record<number, Buffer>;
+    try {
+      tlvData = tlv.decode(data);
+    } catch (error) {
+      debug("[%s] Pair-Verify: failed to decode TLV request: %s", this.accessoryInfo.username, error.message);
+      response.writeHead(HAPPairingHTTPCode.BAD_REQUEST, { "Content-Type": "application/pairing+tlv8" });
+      response.end(tlv.encode(TLVValues.STATE, PairingStates.M2, TLVValues.ERROR_CODE, TLVErrorCode.UNKNOWN));
+      return;
+    }
+    if (!tlvData[TLVValues.SEQUENCE_NUM]) {
+      response.writeHead(HAPPairingHTTPCode.BAD_REQUEST, { "Content-Type": "application/pairing+tlv8" });
+      response.end(tlv.encode(TLVValues.STATE, PairingStates.M2, TLVValues.ERROR_CODE, TLVErrorCode.UNKNOWN));
+      return;
+    }
     const sequence = tlvData[TLVValues.SEQUENCE_NUM][0]; // value is single byte with sequence number
 
     if (sequence === PairingStates.M1) {
@@ -681,7 +726,7 @@ export class HAPServer extends EventEmitter {
     const serverProof = tweetnacl.sign.detached(material, privateKey);
     const encSalt = Buffer.from("Pair-Verify-Encrypt-Salt");
     const encInfo = Buffer.from("Pair-Verify-Encrypt-Info");
-    const outputKey = hapCrypto.HKDF("sha512", encSalt, sharedSec, encInfo, 32).slice(0, 32);
+    const outputKey = hapCrypto.HKDF("sha512", encSalt, sharedSec, encInfo, 32).subarray(0, 32);
 
     connection.encryption = new HAPEncryption(clientPublicKey, secretKey, publicKey, sharedSec, outputKey);
 
@@ -702,6 +747,13 @@ export class HAPServer extends EventEmitter {
   private handlePairVerifyM3(connection: HAPConnection, request: IncomingMessage, response: ServerResponse, objects: Record<number, Buffer>): void {
     debug("[%s] Pair verify step 2/2", this.accessoryInfo.username);
     const encryptedData = objects[TLVValues.ENCRYPTED_DATA];
+    if (!encryptedData || encryptedData.length < 16) {
+      debug("[%s] M3: Encrypted data missing or too short", this.accessoryInfo.username);
+      response.writeHead(HAPPairingHTTPCode.OK, { "Content-Type": "application/pairing+tlv8" });
+      response.end(tlv.encode(TLVValues.STATE, PairingStates.M4, TLVValues.ERROR_CODE, TLVErrorCode.AUTHENTICATION));
+      connection._pairVerifyState = undefined;
+      return;
+    }
     const messageData = Buffer.alloc(encryptedData.length - 16);
     const authTagData = Buffer.alloc(16);
     encryptedData.copy(messageData, 0, 0, encryptedData.length - 16);
@@ -713,18 +765,33 @@ export class HAPServer extends EventEmitter {
     let plaintext;
     try {
       plaintext = hapCrypto.chacha20_poly1305_decryptAndVerify(enc.hkdfPairEncryptionKey, Buffer.from("PV-Msg03"), null, messageData, authTagData);
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     } catch (error) {
-      debug("[%s] M3: Failed to decrypt and/or verify", this.accessoryInfo.username);
+      debug("[%s] M3: Failed to decrypt and/or verify: %s", this.accessoryInfo.username, error);
       response.writeHead(HAPPairingHTTPCode.OK, { "Content-Type": "application/pairing+tlv8" });
       response.end(tlv.encode(TLVValues.STATE, PairingStates.M4, TLVValues.ERROR_CODE, TLVErrorCode.AUTHENTICATION));
       connection._pairVerifyState = undefined;
       return;
     }
 
-    const decoded = tlv.decode(plaintext);
+    let decoded: Record<number, Buffer>;
+    try {
+      decoded = tlv.decode(plaintext);
+    } catch (error) {
+      debug("[%s] M3: Failed to decode decrypted TLV payload: %s", this.accessoryInfo.username, error.message);
+      response.writeHead(HAPPairingHTTPCode.OK, { "Content-Type": "application/pairing+tlv8" });
+      response.end(tlv.encode(TLVValues.STATE, PairingStates.M4, TLVValues.ERROR_CODE, TLVErrorCode.UNKNOWN));
+      connection._pairVerifyState = undefined;
+      return;
+    }
     const clientUsername = decoded[TLVValues.USERNAME];
     const proof = decoded[TLVValues.PROOF];
+    if (!clientUsername || !proof) {
+      debug("[%s] M3: Missing required TLV fields in decrypted payload", this.accessoryInfo.username);
+      response.writeHead(HAPPairingHTTPCode.OK, { "Content-Type": "application/pairing+tlv8" });
+      response.end(tlv.encode(TLVValues.STATE, PairingStates.M4, TLVValues.ERROR_CODE, TLVErrorCode.UNKNOWN));
+      connection._pairVerifyState = undefined;
+      return;
+    }
     const material = Buffer.concat([enc.clientPublicKey, clientUsername, enc.publicKey]);
     // since we're paired, we should have the public key stored for this client
     const clientPublicKey = this.accessoryInfo.getClientPublicKey(clientUsername.toString());
@@ -769,7 +836,20 @@ export class HAPServer extends EventEmitter {
       return;
     }
 
-    const objects = tlv.decode(data);
+    let objects: Record<number, Buffer>;
+    try {
+      objects = tlv.decode(data);
+    } catch (error) {
+      debug("[%s] Pairings: failed to decode TLV request: %s", this.accessoryInfo.username, error.message);
+      response.writeHead(HAPPairingHTTPCode.OK, { "Content-Type": "application/pairing+tlv8" });
+      response.end(tlv.encode(TLVValues.STATE, PairingStates.M2, TLVValues.ERROR_CODE, TLVErrorCode.UNKNOWN));
+      return;
+    }
+    if (!objects[TLVValues.METHOD] || !objects[TLVValues.STATE]) {
+      response.writeHead(HAPPairingHTTPCode.OK, { "Content-Type": "application/pairing+tlv8" });
+      response.end(tlv.encode(TLVValues.STATE, PairingStates.M2, TLVValues.ERROR_CODE, TLVErrorCode.UNKNOWN));
+      return;
+    }
     const method = objects[TLVValues.METHOD][0]; // value is single byte with request type
 
     const state = objects[TLVValues.STATE][0];
@@ -778,6 +858,11 @@ export class HAPServer extends EventEmitter {
     }
 
     if (method === PairMethods.ADD_PAIRING) {
+      if (!objects[TLVValues.IDENTIFIER] || !objects[TLVValues.PUBLIC_KEY] || !objects[TLVValues.PERMISSIONS]) {
+        response.writeHead(HAPPairingHTTPCode.OK, { "Content-Type": "application/pairing+tlv8" });
+        response.end(tlv.encode(TLVValues.STATE, PairingStates.M2, TLVValues.ERROR_CODE, TLVErrorCode.UNKNOWN));
+        return;
+      }
       const identifier = objects[TLVValues.IDENTIFIER].toString();
       const publicKey = objects[TLVValues.PUBLIC_KEY];
       const permissions = objects[TLVValues.PERMISSIONS][0] as PermissionTypes;
@@ -795,6 +880,11 @@ export class HAPServer extends EventEmitter {
         debug("[%s] Pairings: successfully executed ADD_PAIRING", this.accessoryInfo.username);
       }));
     } else if (method === PairMethods.REMOVE_PAIRING) {
+      if (!objects[TLVValues.IDENTIFIER]) {
+        response.writeHead(HAPPairingHTTPCode.OK, { "Content-Type": "application/pairing+tlv8" });
+        response.end(tlv.encode(TLVValues.STATE, PairingStates.M2, TLVValues.ERROR_CODE, TLVErrorCode.UNKNOWN));
+        return;
+      }
       const identifier = objects[TLVValues.IDENTIFIER].toString();
 
       this.emit(HAPServerEventTypes.REMOVE_PAIRING, connection, identifier, once((error: TLVErrorCode | 0) => {
@@ -878,6 +968,11 @@ export class HAPServer extends EventEmitter {
       const ids: CharacteristicId[] = [];
       for (const entry of idParam.split(",")) { // ["1.9","2.14"]
         const split = entry.split("."); // ["1","9"]
+        if (split.length !== 2 || !/^\d+$/.test(split[0]) || !/^\d+$/.test(split[1])) {
+          response.writeHead(HAPHTTPCode.BAD_REQUEST, { "Content-Type": HAPMimeTypes.HAP_JSON });
+          response.end(JSON.stringify({ status: HAPStatus.INVALID_VALUE_IN_REQUEST }));
+          return;
+        }
         ids.push({
           aid: parseInt(split[0], 10), // accessory id
           iid: parseInt(split[1], 10), // (characteristic) instance id
@@ -928,7 +1023,12 @@ export class HAPServer extends EventEmitter {
       );
     } else if (request.method === "PUT") {
       if (!connection.isAuthenticated()) {
-        if (!request.headers || (request.headers && request.headers.authorization !== this.accessoryInfo.pincode)) {
+        const authorization = request.headers?.authorization;
+        const authorizationBuffer = authorization ? Buffer.from(authorization) : undefined;
+        const pincodeBuffer = Buffer.from(this.accessoryInfo.pincode);
+        if (!authorizationBuffer
+          || authorizationBuffer.length !== pincodeBuffer.length
+          || !crypto.timingSafeEqual(authorizationBuffer, pincodeBuffer)) {
           response.writeHead(HAPPairingHTTPCode.CONNECTION_AUTHORIZATION_REQUIRED, { "Content-Type": HAPMimeTypes.HAP_JSON });
           response.end(JSON.stringify({ status: HAPStatus.INSUFFICIENT_PRIVILEGES }));
           return;
@@ -1026,7 +1126,12 @@ export class HAPServer extends EventEmitter {
 
   private handleResource(connection: HAPConnection, url: URL, request: IncomingMessage, data: Buffer, response: ServerResponse): void {
     if (!connection.isAuthenticated()) {
-      if (!(this.allowInsecureRequest && request.headers && request.headers.authorization === this.accessoryInfo.pincode)) {
+      const authorization = request.headers?.authorization;
+      const authorizationBuffer = authorization ? Buffer.from(authorization) : undefined;
+      const pincodeBuffer = Buffer.from(this.accessoryInfo.pincode);
+      if (!(this.allowInsecureRequest && authorizationBuffer
+        && authorizationBuffer.length === pincodeBuffer.length
+        && crypto.timingSafeEqual(authorizationBuffer, pincodeBuffer))) {
         response.writeHead(HAPPairingHTTPCode.CONNECTION_AUTHORIZATION_REQUIRED, { "Content-Type": HAPMimeTypes.HAP_JSON });
         response.end(JSON.stringify({ status: HAPStatus.INSUFFICIENT_PRIVILEGES }));
         return;

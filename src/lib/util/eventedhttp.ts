@@ -68,9 +68,6 @@ export const enum EventedHTTPServerEvent {
   CONNECTION_CLOSED = "connection-closed",
 }
 
-/**
- * @group HAP Accessory Server
- */
 // eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
 export declare interface EventedHTTPServer {
 
@@ -323,9 +320,6 @@ export const enum HAPConnectionEvent {
   CLOSED = "closed",
 }
 
-/**
- * @group HAP Accessory Server
- */
 // eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
 export declare interface HAPConnection {
   on(event: "request", listener: (request: IncomingMessage, response: ServerResponse) => void): this;

@@ -358,9 +358,6 @@ export const enum RemoteControllerEvents {
   TARGETS_RESET = "targets-reset",
 }
 
-/**
- * @group Apple TV Remote
- */
 // eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
 export declare interface RemoteController {
   on(event: "active-change", listener: (active: boolean) => void): this;
@@ -1391,9 +1388,6 @@ export const enum SiriAudioSessionEvents {
   CLOSE = "close",
 }
 
-/**
- * @group Apple TV Remote
- */
 // eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
 export declare interface SiriAudioSession {
   on(event: "close", listener: () => void): this;

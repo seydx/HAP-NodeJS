@@ -27,6 +27,7 @@ import * as tlv from "../util/tlv";
 import { H264CodecParameters, H264Level, H264Profile, Resolution } from "./RTPStreamManagement";
 
 const debug = createDebug("HAP-NodeJS:Camera:RecordingManagement");
+const hksvDebug = createDebug("HAP-NodeJS:HKSV");
 
 /**
  * Describes options passed to the {@link RecordingManagement}.
@@ -461,6 +462,8 @@ export class RecordingManagement {
     this.supportedAudioRecordingConfiguration = this._supportedAudioStreamConfiguration(options.audio);
 
     this.setupServiceHandlers();
+
+    hksvDebug("RecordingManagement created (eventTriggers=0x%s)", this.eventTriggerOptions.toString(16));
   }
 
   private constructService(): RecordingManagementServices {
@@ -501,6 +504,7 @@ export class RecordingManagement {
         }
 
         this.recordingActive = !!value;
+        hksvDebug("Active onSet: recordingActive -> %s", this.recordingActive);
         this.delegate.updateRecordingActive(this.recordingActive);
       })
       .on(CharacteristicEventTypes.CHANGE, () => this.stateChangeDelegate?.())
@@ -553,6 +557,7 @@ export class RecordingManagement {
     }
 
     if (!this.recordingActive) {
+      hksvDebug("[HDS %s] rejecting DATA_SEND OPEN: recordingActive=false", connection.remoteAddress);
       connection.sendResponse(Protocols.DATA_SEND, Topics.OPEN, id, HDSStatus.PROTOCOL_SPECIFIC_ERROR, {
         status: HDSProtocolSpecificErrorReason.NOT_ALLOWED,
       });
@@ -560,6 +565,7 @@ export class RecordingManagement {
     }
 
     if (!this.operatingModeService.getCharacteristic(Characteristic.HomeKitCameraActive).value) {
+      hksvDebug("[HDS %s] rejecting DATA_SEND OPEN: HomeKitCameraActive=false", connection.remoteAddress);
       connection.sendResponse(Protocols.DATA_SEND, Topics.OPEN, id, HDSStatus.PROTOCOL_SPECIFIC_ERROR, {
         status: HDSProtocolSpecificErrorReason.NOT_ALLOWED,
       });
@@ -577,6 +583,7 @@ export class RecordingManagement {
     }
 
     if (!this.selectedConfiguration) {
+      hksvDebug("[HDS %s] rejecting DATA_SEND OPEN: no selectedConfiguration (homebridge#3928)", connection.remoteAddress);
       connection.sendResponse(Protocols.DATA_SEND, Topics.OPEN, id, HDSStatus.PROTOCOL_SPECIFIC_ERROR, {
         status: HDSProtocolSpecificErrorReason.INVALID_CONFIGURATION,
       });
@@ -608,6 +615,11 @@ export class RecordingManagement {
     const configuration = this.parseSelectedConfiguration(value);
 
     const changed = this.selectedConfiguration?.base64 !== value;
+
+    hksvDebug("SelectedRecordingConfiguration write: changed=%s hasStateChangeDelegate=%s base64Len=%d",
+      changed,
+      !!this.stateChangeDelegate,
+      typeof value === "string" ? value.length : -1);
 
     this.selectedConfiguration = {
       parsed: configuration,
@@ -836,6 +848,14 @@ export class RecordingManagement {
 
     // we only restore the `selectedConfiguration` if our supported configuration hasn't changed.
     const currentConfigurationHash = this.computeConfigurationHash(serialized.configurationHash.algorithm);
+
+    hksvDebug("deserialize: hasSavedSelectedConfig=%s savedHash=%s currentHash=%s hashMatch=%s recordingActive=%s",
+      !!serialized.selectedConfiguration,
+      serialized.configurationHash?.hash?.slice(0, 12),
+      currentConfigurationHash.slice(0, 12),
+      currentConfigurationHash === serialized.configurationHash?.hash,
+      serialized.recordingActive);
+
     if (serialized.selectedConfiguration) {
       if (currentConfigurationHash === serialized.configurationHash.hash) {
         this.selectedConfiguration = {
@@ -843,6 +863,7 @@ export class RecordingManagement {
           parsed: this.parseSelectedConfiguration(serialized.selectedConfiguration),
         };
       } else {
+        hksvDebug("deserialize: discarding saved selectedConfiguration — supportedConfiguration hash changed since last run");
         changedState = true;
       }
     }
@@ -861,7 +882,10 @@ export class RecordingManagement {
 
     try {
       if (this.selectedConfiguration) {
+        hksvDebug("deserialize: replaying updateRecordingConfiguration to delegate");
         this.delegate.updateRecordingConfiguration(this.selectedConfiguration.parsed);
+      } else {
+        hksvDebug("deserialize: no selectedConfiguration to restore");
       }
       if (serialized.recordingActive) {
         this.delegate.updateRecordingActive(serialized.recordingActive);
@@ -887,6 +911,7 @@ export class RecordingManagement {
   }
 
   handleFactoryReset(): void {
+    hksvDebug("handleFactoryReset: clearing selectedConfiguration and resetting recording state");
     this.selectedConfiguration = undefined;
     this.recordingManagementService.updateCharacteristic(Characteristic.Active, false);
     this.recordingManagementService.updateCharacteristic(Characteristic.RecordingAudioActive, false);
@@ -922,9 +947,6 @@ const enum CameraRecordingStreamEvents {
   CLOSED = "closed",
 }
 
-/**
- * @group Camera
- */
 // eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
 declare interface CameraRecordingStream {
   on(event: "closed", listener: () => void): this;
@@ -944,6 +966,7 @@ class CameraRecordingStream extends EventEmitter implements DataStreamProtocolHa
   readonly delegate: CameraRecordingDelegate;
   readonly hdsRequestId: number;
   readonly streamId: number;
+  private abortController?: AbortController;
   private closed = false;
 
   eventHandler?: Record<string, EventHandler> = {
@@ -1000,11 +1023,12 @@ class CameraRecordingStream extends EventEmitter implements DataStreamProtocolHa
     let lastFragmentWasMarkedLast = false;
 
     try {
-      this.generator = this.delegate.handleRecordingStreamRequest(this.streamId);
+      this.abortController = new AbortController();
+      this.generator = this.delegate.handleRecordingStreamRequest(this.streamId, this.abortController.signal);
 
       for await (const packet of this.generator) {
         if (this.closed) {
-          console.error(`[HDS ${this.connection.remoteAddress}] Delegate yielded fragment after stream ${this.streamId} was already closed!`);
+          debug("[HDS %s] Delegate yielded fragment after stream %d was already closed.", this.connection.remoteAddress, this.streamId);
           break;
         }
 
@@ -1022,7 +1046,7 @@ class CameraRecordingStream extends EventEmitter implements DataStreamProtocolHa
             break;
           }
 
-          const data = fragment.slice(offset, offset + maxChunk);
+          const data = fragment.subarray(offset, offset + maxChunk);
           offset += data.length;
 
           // see https://github.com/Supereg/secure-video-specification#42-binary-data
@@ -1085,6 +1109,7 @@ class CameraRecordingStream extends EventEmitter implements DataStreamProtocolHa
       }
       return;
     } finally {
+      this.abortController = undefined;
       this.generator = undefined;
 
       if (this.generatorTimeout) {
@@ -1140,7 +1165,15 @@ class CameraRecordingStream extends EventEmitter implements DataStreamProtocolHa
   }
 
   private handleClosed(closure: () => void): void {
+    if (this.closed) {
+      return;
+    }
+
     this.closed = true;
+
+    // Signal the delegate's generator to stop immediately. This allows delegates with abortable async operations (e.g. pacing delays) to interrupt them and
+    // return without yielding to a closed stream.
+    this.abortController?.abort();
 
     if (this.closingTimeout) {
       clearTimeout(this.closingTimeout);
@@ -1151,6 +1184,15 @@ class CameraRecordingStream extends EventEmitter implements DataStreamProtocolHa
     this.connection.removeListener(DataStreamConnectionEvent.CLOSED, this.closeListener);
 
     if (this.generator) {
+      // Signal the generator to terminate via the async generator protocol. The return is queued and takes effect
+      // after the generator's current await completes. Combined with the AbortSignal above, this ensures the
+      // generator terminates promptly even if the delegate doesn't check the signal. We catch rejections
+      // to prevent unhandled promise warnings if the generator's cleanup throws.
+      // @ts-expect-error: AsyncGenerator.return() requires a value parameter, but we're signaling termination.
+      void this.generator.return().catch((error: Error) =>
+        debug("[HDS %s] Error while closing recording generator for stream %d: %s",
+          this.connection.remoteAddress, this.streamId, error.stack ?? String(error)));
+
       // when this variable is defined, the generator hasn't returned yet.
       // we start a timeout to uncover potential programming mistakes where we await forever and can't free resources.
       this.generatorTimeout = setTimeout(() => {

@@ -95,6 +95,21 @@ describe("tlv", () => {
         1: Buffer.from("010203", "hex"),
       });
     });
+
+    test("should throw on truncated buffer (incomplete header)", () => {
+      // Only 1 byte — not enough for type + length
+      expect(() => decode(Buffer.from("01", "hex"))).toThrow("incomplete type/length header");
+    });
+
+    test("should throw when declared length exceeds remaining buffer", () => {
+      // Type 0x01, length 0x05, but only 2 bytes of data follow
+      expect(() => decode(Buffer.from("01050102", "hex"))).toThrow("declared length");
+    });
+
+    test("should not throw on valid zero-length entry", () => {
+      // Type 0x01, length 0x00
+      expect(() => decode(Buffer.from("0100", "hex"))).not.toThrow();
+    });
   });
 
   describe("decodeWithLists", () => {
@@ -177,7 +192,7 @@ describe("tlv", () => {
 
     test("reject lists which are not properly separated with zero tlv type", () => {
       expect(() => decodeWithLists(Buffer.from("01010a01010b", "hex")))
-        .toThrowError();
+        .toThrow();
     });
   });
 
@@ -225,7 +240,7 @@ describe("tlv", () => {
 
     test("reject ill-formatted tlv list", () => {
       expect(() => decodeList(Buffer.from("020101", "hex"), 0x01))
-        .toThrowError();
+        .toThrow();
     });
   });
 
@@ -233,7 +248,7 @@ describe("tlv", () => {
     test("writeVariableUIntLE", () => {
       // negative numbers are not allowed
       expect(() => writeVariableUIntLE(-1))
-        .toThrowError();
+        .toThrow();
 
       const input8 = 128;
       const buffer8 = writeVariableUIntLE(input8);

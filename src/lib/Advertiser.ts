@@ -1,10 +1,8 @@
-// eslint-disable-next-line @typescript-eslint/triple-slash-reference
-/// <reference path="../../@types/bonjour-hap.d.ts" />
 import ciao, { CiaoService, MDNSServerOptions, Responder, ServiceEvent, ServiceTxt, ServiceType } from "@homebridge/ciao";
 import { InterfaceName, IPAddress } from "@homebridge/ciao/lib/NetworkManager";
 import dbus, { DBusInterface, MessageBus } from "@homebridge/dbus-native";
 import assert from "assert";
-import bonjour, { BonjourHAP, BonjourHAPService } from "bonjour-hap";
+import bonjour, { Advertisement, Bonjour } from "bonjour-hap";
 import crypto from "crypto";
 import createDebug from "debug";
 import { EventEmitter } from "events";
@@ -179,7 +177,7 @@ export class CiaoAdvertiser extends EventEmitter implements Advertiser {
   static computeSetupHash(accessoryInfo: AccessoryInfo): string {
     const hash = crypto.createHash("sha512");
     hash.update(accessoryInfo.setupID + accessoryInfo.username.toUpperCase());
-    return hash.digest().slice(0, 4).toString("base64");
+    return hash.digest().subarray(0, 4).toString("base64");
   }
 
   public static ff(...flags: PairingFeatureFlag[]): number {
@@ -205,8 +203,8 @@ export class BonjourHAPAdvertiser extends EventEmitter implements Advertiser {
   private readonly setupHash: string;
   private readonly serviceOptions?: ServiceNetworkOptions;
 
-  private bonjour: BonjourHAP;
-  private advertisement?: BonjourHAPService;
+  private bonjour: Bonjour;
+  private advertisement?: Advertisement;
 
   private port?: number;
   private destroyed = false;
@@ -505,7 +503,6 @@ export class AvahiAdvertiser extends EventEmitter implements Advertiser {
     try {
       try {
         await messageBusConnectionResult(bus);
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       } catch (error) {
         debug("Avahi/DBus classified unavailable due to missing dbus interface!");
         return false;
@@ -514,7 +511,6 @@ export class AvahiAdvertiser extends EventEmitter implements Advertiser {
       try {
         const version = await this.avahiInvoke(bus, "/", "Server", "GetVersionString");
         debug("Detected Avahi over DBus interface running version '%s'.", version);
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       } catch (error) {
         debug("Avahi/DBus classified unavailable due to missing avahi interface!");
         return false;
@@ -678,7 +674,6 @@ export class ResolvedAdvertiser extends EventEmitter implements Advertiser {
     try {
       try {
         await messageBusConnectionResult(bus);
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       } catch (error) {
         debug("systemd-resolved/DBus classified unavailable due to missing dbus interface!");
         return false;
@@ -691,7 +686,6 @@ export class ResolvedAdvertiser extends EventEmitter implements Advertiser {
           signature: "isit",
         });
         debug("Detected systemd-resolved over DBus interface running version.");
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       } catch (error) {
         debug("systemd-resolved/DBus classified unavailable due to missing systemd-resolved interface!");
         return false;

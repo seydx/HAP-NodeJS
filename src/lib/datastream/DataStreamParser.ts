@@ -351,7 +351,7 @@ export class DataStreamReader {
 
   finished(): void {
     if (this.readerIndex < this.data.length) {
-      const remainingHex = this.data.slice(this.readerIndex, this.data.length).toString("hex");
+      const remainingHex = this.data.subarray(this.readerIndex, this.data.length).toString("hex");
       debug("WARNING Finished reading HDS stream, but there are still %d bytes remaining () %s", this.data.length - this.readerIndex, remainingHex);
     }
   }
@@ -441,6 +441,7 @@ export class DataStreamReader {
   readFloat64LE(): number {
     this.ensureLength(8);
     const value = this.data.readDoubleLE(this.readerIndex);
+    this.readerIndex += 8;
     return this.trackData(value);
   }
 
@@ -523,7 +524,7 @@ export class DataStreamReader {
 
   readData(length: number): Buffer {
     this.ensureLength(length);
-    const value = this.data.slice(this.readerIndex, this.readerIndex + length);
+    const value = this.data.subarray(this.readerIndex, this.readerIndex + length);
     this.readerIndex += length;
 
     return this.trackData(value);
@@ -565,7 +566,7 @@ export class DataStreamReader {
       }
     }
 
-    const value = this.data.slice(this.readerIndex, offset);
+    const value = this.data.subarray(this.readerIndex, offset);
     this.readerIndex = offset + 1;
     return this.trackData(value);
   }
@@ -633,7 +634,7 @@ export class DataStreamWriter {
   }
 
   getData(): Buffer {
-    return this.data.slice(0, this.writerIndex);
+    return this.data.subarray(0, this.writerIndex);
   }
 
   private ensureLength(bytes: number) {
@@ -684,7 +685,7 @@ export class DataStreamWriter {
       this.writeInt8(new Int8(number));
     } else if (number >= -32768 && number <= 32767) {
       this.writeInt16LE(new Int16(number));
-    } else if (number >= -2147483648 && number <= -2147483648) {
+    } else if (number >= -2147483648 && number <= 2147483647) {
       this.writeInt32LE(new Int32(number));
     } else if (number >= Number.MIN_SAFE_INTEGER && number <= Number.MAX_SAFE_INTEGER) { // use correct uin64 restriction when we convert to bigint
       this.writeInt64LE(new Int64(number));
@@ -790,7 +791,7 @@ export class DataStreamWriter {
     const length = Buffer.byteLength(utf8);
     if (length <= 32) {
       this.ensureLength(1 + length);
-      this.writeTag(DataFormatTags.UTF8_LENGTH_START + utf8.length);
+      this.writeTag(DataFormatTags.UTF8_LENGTH_START + length);
       this._writeUTF8(utf8);
     } else if (length <= 255) {
       this.writeUTF8_Length8(utf8);

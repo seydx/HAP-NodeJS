@@ -129,9 +129,6 @@ export const enum ServiceEventTypes {
   CHARACTERISTIC_WARNING = "characteristic-warning",
 }
 
-/**
- * @group Service
- */
 // eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
 export declare interface Service {
   on(event: "characteristic-change", listener: (change: ServiceCharacteristicChange) => void): this;
@@ -237,6 +234,7 @@ export class Service extends EventEmitter {
   public static CarbonMonoxideSensor: typeof CarbonMonoxideSensor;
   /**
    * @group Service Definitions
+   * @deprecated Removed
    */
   public static CloudRelay: typeof CloudRelay;
   /**
@@ -401,6 +399,7 @@ export class Service extends EventEmitter {
   public static Switch: typeof Switch;
   /**
    * @group Service Definitions
+   * @deprecated Removed
    */
   public static TapManagement: typeof TapManagement;
   /**
@@ -437,6 +436,7 @@ export class Service extends EventEmitter {
   public static TransferTransportManagement: typeof TransferTransportManagement;
   /**
    * @group Service Definitions
+   * @deprecated Removed
    */
   public static Tunnel: typeof Tunnel;
   /**

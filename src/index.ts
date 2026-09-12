@@ -6,6 +6,7 @@ import createDebug from "debug";
  * @group Utils
  */
 export * as uuid from "./lib/util/uuid";
+export * from "./lib/model/HAPFileStorage";
 export * from "./lib/model/HAPStorage";
 export * from "./lib/Accessory";
 export * from "./lib/Bridge";

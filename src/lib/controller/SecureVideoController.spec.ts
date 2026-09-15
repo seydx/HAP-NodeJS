@@ -18,9 +18,10 @@ import {
 import { Accessory } from "../Accessory";
 import { Characteristic } from "../Characteristic";
 import "../definitions";
+import { HAPStatus } from "../HAPServer";
 import { Service } from "../Service";
 import * as uuid from "../util/uuid";
-import { CameraRecordingDelegate } from "./CameraController";
+import { CameraRecordingDelegate, ResourceRequestReason } from "./CameraController";
 import { MultiTierRTPStreamingDelegate, SecureVideoController, SecureVideoControllerOptions, WebRTCStreamingDelegate } from "./SecureVideoController";
 
 const recordingOptions: CameraRecordingOptions = {
@@ -63,6 +64,7 @@ describe("SecureVideoController", () => {
   let controller: SecureVideoController;
   let webrtc: jest.Mocked<WebRTCStreamingDelegate>;
   let rtp: jest.Mocked<MultiTierRTPStreamingDelegate>;
+  let snapshot: jest.Mock;
 
   beforeEach(() => {
     webrtc = {
@@ -78,6 +80,8 @@ describe("SecureVideoController", () => {
       stopStream: jest.fn().mockResolvedValue(undefined),
     };
 
+    snapshot = jest.fn().mockResolvedValue(Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+
     const options: SecureVideoControllerOptions = {
       sensor: { uuid: uuid.generate("sensor"), width: 1920, height: 1080 },
       video: {
@@ -91,6 +95,7 @@ describe("SecureVideoController", () => {
       webrtc: { delegate: webrtc, maxSessions: 1 },
       rtp: { delegate: rtp },
       recording: { options: recordingOptions, delegate: recordingDelegate },
+      snapshot,
       ingest: {
         delegate: {
           // eslint-disable-next-line require-yield
@@ -227,6 +232,25 @@ describe("SecureVideoController", () => {
     expect(controller.multiTierStreamManagementService!.linkedServices).toContain(dataStream);
     expect(controller.webrtcStreamManagementService!.linkedServices).toContain(dataStream);
     expect(recording.getCharacteristic(Characteristic.SupportedCameraRecordingConfiguration).value).toBeDefined();
+  });
+
+  test("serves the image resource request through the snapshot handler", async () => {
+    await expect(controller.handleSnapshotRequest(720, 1280, "Camera", ResourceRequestReason.PERIODIC))
+      .resolves.toEqual(Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+    expect(snapshot).toHaveBeenCalledWith({ height: 720, width: 1280, reason: ResourceRequestReason.PERIODIC });
+
+    controller.globalOperatingModeService!.setCharacteristic(Characteristic.HomeKitCameraActive, 0);
+    await expect(controller.handleSnapshotRequest(720, 1280, "Camera")).rejects.toBe(HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE);
+    controller.globalOperatingModeService!.setCharacteristic(Characteristic.HomeKitCameraActive, 1);
+
+    controller.recordingManagement!.operatingModeService.setCharacteristic(Characteristic.PeriodicSnapshotsActive, false);
+    await expect(controller.handleSnapshotRequest(720, 1280, "Camera", ResourceRequestReason.PERIODIC))
+      .rejects.toBe(HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE);
+    await expect(controller.handleSnapshotRequest(720, 1280, "Camera", ResourceRequestReason.EVENT)).resolves.toBeDefined();
+
+    snapshot.mockRejectedValueOnce(new Error("camera offline"));
+    await expect(controller.handleSnapshotRequest(720, 1280, "Camera", ResourceRequestReason.EVENT))
+      .rejects.toBe(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
   });
 
   test("hds only without an ingest delegate", () => {

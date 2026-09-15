@@ -10,6 +10,8 @@ import {
   H264Level,
   H264Profile,
   MediaContainerType,
+  StreamTierAudioBitDepth,
+  StreamTierAudioSampleRate,
   StreamTierVideoCodec,
   VideoCodecType,
   WebRTCSolicitOfferStatus,
@@ -92,6 +94,17 @@ describe("SecureVideoController", () => {
           { identifier: 3, quality: CameraVideoQuality.LOW, targetAverageBitrate: 180, peakBitrate: 190, width: 640, height: 360, frameRate: 15 },
         ],
       },
+      audio: {
+        tier: {
+          identifier: 1,
+          targetAverageBitrate: 24000,
+          sampleRate: StreamTierAudioSampleRate.KHZ_16,
+          bitDepth: StreamTierAudioBitDepth.BITS_16,
+          packetTime: 20,
+          channels: 1,
+        },
+        twoWayAudio: true,
+      },
       webrtc: { delegate: webrtc, maxSessions: 1 },
       rtp: { delegate: rtp },
       recording: { options: recordingOptions, delegate: recordingDelegate },
@@ -116,7 +129,7 @@ describe("SecureVideoController", () => {
       Service.CameraCapabilities, Service.CameraGlobalOperatingMode, Service.CameraMotionZones, Service.CameraBufferManagement,
       Service.CameraMultiTierRTPStreamManagement, Service.CameraWebRTCStreamManagement, Service.CameraRecordingManagement,
       Service.CameraOperatingMode, Service.DataStreamTransportManagement, Service.CameraKeyManagement,
-      Service.CameraClientCertificateManagement, Service.MotionSensor,
+      Service.CameraClientCertificateManagement, Service.MotionSensor, Service.Microphone, Service.Speaker,
     ]) {
       expect(accessory.getService(service)).toBeDefined();
     }

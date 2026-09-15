@@ -80,7 +80,9 @@ import {
   CameraRecordingManagement,
   CameraWebRTCStreamManagement,
   DataStreamTransportManagement,
+  Microphone,
   MotionSensor,
+  Speaker,
 } from "../definitions";
 import { HAPStatus } from "../HAPServer";
 import { Service } from "../Service";
@@ -282,6 +284,8 @@ export interface SecureVideoControllerOptions {
   audio?: {
     payloadType?: number;
     tier: AudioStreamTier;
+    /** adds the Speaker service so the Home app offers talkback, like `twoWayAudio` of the {@link CameraStreamingOptions} */
+    twoWayAudio?: boolean;
   };
   webrtc: {
     delegate: WebRTCStreamingDelegate;
@@ -349,6 +353,8 @@ export interface SecureVideoControllerServiceMap extends ControllerServiceMap {
   keyManagement?: CameraKeyManagement;
   clientCertificateManagement?: CameraClientCertificateManagement;
   motionSensor?: MotionSensor;
+  microphone?: Microphone;
+  speaker?: Speaker;
 }
 
 /**
@@ -424,6 +430,8 @@ export class SecureVideoController extends EventEmitter
   public keyManagementService?: CameraKeyManagement;
   public clientCertificateManagementService?: CameraClientCertificateManagement;
   public motionService?: Service;
+  public microphoneService?: Microphone;
+  public speakerService?: Speaker;
 
   private readonly options: SecureVideoControllerOptions;
   private stateChangeDelegate?: StateChangeDelegate;
@@ -980,6 +988,27 @@ export class SecureVideoController extends EventEmitter
           updated = true;
         }
       }
+    }
+
+    if (this.options.audio) {
+      this.microphoneService = ensure("microphone", () => {
+        const service = new Service.Microphone("", "");
+        service.setCharacteristic(Characteristic.Volume, 100);
+        return service;
+      });
+    } else if (serviceMap.microphone) {
+      delete serviceMap.microphone;
+      updated = true;
+    }
+    if (this.options.audio?.twoWayAudio) {
+      this.speakerService = ensure("speaker", () => {
+        const service = new Service.Speaker("", "");
+        service.setCharacteristic(Characteristic.Volume, 100);
+        return service;
+      });
+    } else if (serviceMap.speaker) {
+      delete serviceMap.speaker;
+      updated = true;
     }
 
     if (this.options.motionService) {

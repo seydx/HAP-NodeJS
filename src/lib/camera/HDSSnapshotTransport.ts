@@ -11,17 +11,20 @@ import {
   Topics,
 } from "../datastream";
 
+import type { SnapshotRequest } from "./RTPStreamManagement";
+
 const debug = createDebug("HAP-NodeJS:SecureVideo:Snapshot");
 
 const CHUNK_SIZE = 0x40000;
 const TIMEOUT_MS = 25000;
 
 /**
- * Produces a JPEG snapshot for the HDS `ipcamera.snapshot` relay.
+ * Produces a JPEG snapshot for the secure video camera. The HAP image resource request passes the requested
+ * size and reason, the HDS `ipcamera.snapshot` relay carries no such information and calls without a request.
  *
  * @group Camera Secure Video
  */
-export type SecureVideoSnapshotHandler = () => Promise<Buffer>;
+export type SecureVideoSnapshotHandler = (request?: SnapshotRequest) => Promise<Buffer>;
 
 interface SnapshotTransfer {
   connection: DataStreamConnection;

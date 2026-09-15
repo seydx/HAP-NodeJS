@@ -86,7 +86,8 @@ import { HAPStatus } from "../HAPServer";
 import { Service } from "../Service";
 import { HapStatusError } from "../util/hapStatusError";
 import * as uuid from "../util/uuid";
-import { ControllerIdentifier, ControllerServiceMap, SerializableController, StateChangeDelegate } from "./Controller";
+import { ResourceRequestReason } from "./CameraController";
+import { ControllerIdentifier, ControllerServiceMap, SerializableController, SnapshotController, StateChangeDelegate } from "./Controller";
 
 import type { CharacteristicValue } from "../../types";
 import type { CharacteristicChange } from "../Characteristic";
@@ -100,6 +101,8 @@ const debug = createDebug("HAP-NodeJS:SecureVideo:Controller");
 
 const MAX_QUEUED_EVENTS = 256;
 const DEFAULT_MAX_WEBRTC_SESSIONS = 6;
+// same budget as the image resource request of the CameraController (8s slow warning + 17s abort)
+const SNAPSHOT_TIMEOUT_MS = 25000;
 
 function setupEndpointsError(sessionIdentifier: string): RTPSetupEndpointsResponse {
   const emptySRTP: RTPSRTPParameters = { cryptoSuite: 0, masterKey: Buffer.alloc(0), masterSalt: Buffer.alloc(0) };
@@ -309,8 +312,8 @@ export interface SecureVideoControllerOptions {
   /** reuse an existing motion sensor instead of creating one */
   motionService?: Service;
   /**
-   * produces a JPEG snapshot for the HDS `ipcamera.snapshot` relay iOS 27 uses for the secure video services. Without
-   * it no snapshot responder is installed; the legacy image resource request of a {@link CameraController} is not used.
+   * Produces the JPEG snapshots of the camera. They are requested through the HAP image resource request (the
+   * camera tile in the Home app) and, on iOS 27, over the HDS `ipcamera.snapshot` relay. Without it both are rejected.
    */
   snapshot?: SecureVideoSnapshotHandler;
 }
@@ -407,7 +410,8 @@ type TLVWriteHandler = (value: Buffer, connection?: HAPConnection) => Promise<Bu
  * @group Camera Secure Video
  */
 // eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
-export class SecureVideoController extends EventEmitter implements SerializableController<SecureVideoControllerServiceMap, SecureVideoControllerState> {
+export class SecureVideoController extends EventEmitter
+  implements SerializableController<SecureVideoControllerServiceMap, SecureVideoControllerState>, SnapshotController<SecureVideoControllerServiceMap> {
   public static readonly CONTROLLER_ID = "secure-video";
 
   public capabilitiesService?: CameraCapabilities;
@@ -768,6 +772,55 @@ export class SecureVideoController extends EventEmitter implements SerializableC
       this.options.ingest?.delegate.updateClientCertificate?.(!!clientCertificate);
       this.stateChangeDelegate?.();
       return undefined;
+    });
+  }
+
+  /**
+   * @private
+   */
+  handleSnapshotRequest(height: number, width: number, accessoryName?: string, reason?: ResourceRequestReason): Promise<Buffer> {
+    const snapshot = this.options.snapshot;
+    if (!snapshot) {
+      return Promise.reject(HAPStatus.RESOURCE_DOES_NOT_EXIST);
+    }
+
+    const operatingMode = this.recordingManagement?.operatingModeService;
+    if (!this.homeKitCameraActive || !operatingMode?.getCharacteristic(Characteristic.HomeKitCameraActive).value) {
+      debug("[%s] rejecting snapshot as the HomeKit camera is disabled", accessoryName);
+      return Promise.reject(HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE);
+    }
+    if (!operatingMode.getCharacteristic(Characteristic.EventSnapshotsActive).value) {
+      if (reason == null) {
+        return Promise.reject(HAPStatus.INSUFFICIENT_PRIVILEGES);
+      } else if (reason === ResourceRequestReason.EVENT) {
+        debug("[%s] rejecting snapshot as event snapshots are disabled", accessoryName);
+        return Promise.reject(HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE);
+      }
+    }
+    if (!operatingMode.getCharacteristic(Characteristic.PeriodicSnapshotsActive).value) {
+      if (reason == null) {
+        return Promise.reject(HAPStatus.INSUFFICIENT_PRIVILEGES);
+      } else if (reason === ResourceRequestReason.PERIODIC) {
+        debug("[%s] rejecting snapshot as periodic snapshots are disabled", accessoryName);
+        return Promise.reject(HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE);
+      }
+    }
+
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        debug("[%s] the snapshot handler did not respond within %dms", accessoryName, SNAPSHOT_TIMEOUT_MS);
+        reject(HAPStatus.OPERATION_TIMED_OUT);
+      }, SNAPSHOT_TIMEOUT_MS);
+      timeout.unref();
+
+      snapshot({ height, width, reason }).then(buffer => {
+        clearTimeout(timeout);
+        resolve(buffer);
+      }, error => {
+        clearTimeout(timeout);
+        debug("[%s] error getting snapshot: %s", accessoryName, error instanceof Error ? error.message : error);
+        reject(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+      });
     });
   }
 

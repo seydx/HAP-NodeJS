@@ -93,7 +93,6 @@ import { ControllerIdentifier, ControllerServiceMap, SerializableController, Sna
 
 import type { CharacteristicValue } from "../../types";
 import type { CharacteristicChange } from "../Characteristic";
-import type { CMAFMediaDescription } from "../camera/CMAFIngest";
 import type { SecureVideoSnapshotHandler } from "../camera/HDSSnapshotTransport";
 import type { CameraRecordingOptions, RecordingManagementState } from "../camera/RecordingManagement";
 import type { HAPConnection } from "../util/eventedhttp";
@@ -231,8 +230,8 @@ export interface CMAFRecordingDelegate {
   updatePublishingPoint?(publishingPoint: CameraRecordingPublishingPointValue | undefined): void;
   updateClientCertificate?(installed: boolean): void;
   /**
-   * the upload session ended, `error` is set when it failed (the HomeKit HomeHub gets the same as a CMAF error event);
-   * `detail` names the failed request or transport error, or summarizes the playlist requests of a finished upload
+   * a CMAF session ended, `error` is set when it failed (the HomeKit HomeHub gets the same as a CMAF error event);
+   * `detail` names the failed request or transport error
    */
   handleUploadResult?(cmafSessionId: bigint, error?: CMAFError, detail?: string): void;
 }
@@ -241,7 +240,6 @@ export interface CMAFRecordingDelegate {
  * @group Camera Secure Video
  */
 export interface CMAFClipRequest {
-  cmafSessionId: bigint;
   command: BufferUploadCommandRequest;
   /** aborted when the HomeKit HomeHub stops the upload */
   signal: AbortSignal;
@@ -252,13 +250,9 @@ export interface CMAFClipRequest {
  */
 export interface CMAFSegment {
   type: "init" | "media";
-  /** raw fMP4; the controller seals it before upload */
+  /** muxed fMP4 (ftyp + moov, or [prft] moof mdat); the controller splits it into one CMAF track per media type */
   data: Buffer;
-  /** on the init segment: the actual media description for the HLS playlists, overriding the controller default */
-  media?: CMAFMediaDescription;
-  /** on the init segment: wall clock of the first media fragment, defaults to the start of the upload command */
-  startedAt?: Date;
-  /** media fragment duration in seconds, defaults to 2 */
+  /** media fragment duration in seconds, used when the fragment carries no sample durations, defaults to 2 */
   duration?: number;
   /** set on the last media fragment */
   last?: boolean;
@@ -312,6 +306,8 @@ export interface SecureVideoControllerOptions {
     delegate: CMAFRecordingDelegate;
     /** common name placed into the client certificate signing request */
     certificateCommonName?: string;
+    /** User-Agent of the uploads, brand name and version of the accessory software; defaults to `HAP-NodeJS` */
+    userAgent?: string;
   };
   /** reuse an existing motion sensor instead of creating one */
   motionService?: Service;
@@ -377,6 +373,7 @@ export interface SecureVideoControllerState {
   keys: { keyNumber: string, key: string }[];
   currentKeyNumber?: string;
   eventSequenceNumber: string;
+  cmafSessionNumber?: string;
 }
 
 /**
@@ -447,6 +444,8 @@ export class SecureVideoController extends EventEmitter
 
   private events: CameraBufferEvent[] = [];
   private eventSequenceNumber = 0n;
+  // last CMAF session number used for an upload, the publishing point needs it unique and increasing since pairing
+  private cmafSessionNumber = 0n;
 
   private zones?: CameraZonesValue;
   private publishingPoint?: CameraRecordingPublishingPointValue;
@@ -529,18 +528,6 @@ export class SecureVideoController extends EventEmitter
       ca: this.ca,
       keys: [...this.keys.entries()].map(([keyNumber, key]) => ({ keyNumber, key })),
       currentKeyNumber: this.currentKeyNumber,
-    };
-  }
-
-  private ingestMediaDescription(): CMAFMediaDescription {
-    const tiers = this.options.video.tiers;
-    const top = tiers.reduce((best, tier) => (tier.width * tier.height > best.width * best.height ? tier : best), tiers[0]);
-    const codecs = this.options.video.codec === StreamTierVideoCodec.H265 ? "hvc1.1.6.L120.B0" : "avc1.640028";
-    return {
-      codecs,
-      width: top?.width ?? 1920,
-      height: top?.height ?? 1080,
-      bitrate: (top?.targetAverageBitrate ?? 1700) * 1000,
     };
   }
 
@@ -707,13 +694,17 @@ export class SecureVideoController extends EventEmitter
 
   private configureCMAFIngestServices(): void {
     this.cmafIngest = new CMAFIngest(this.options.ingest!.delegate, {
-      sensorUUID: this.options.sensor.uuid,
-      media: this.ingestMediaDescription(),
+      userAgent: this.options.ingest!.userAgent ?? "HAP-NodeJS",
       credentials: () => this.ingestCredentials(),
+      nextSessionNumber: () => {
+        this.cmafSessionNumber += 1n;
+        this.stateChangeDelegate?.();
+        return this.cmafSessionNumber;
+      },
       reportSessionStart: cmafSessionId => this.pushEvent({ type: CameraBufferEventType.CMAF_SESSION_START, cmafSessionId }),
-      reportSessionStop: (cmafSessionId, detail) => {
+      reportSessionStop: cmafSessionId => {
         this.pushEvent({ type: CameraBufferEventType.CMAF_SESSION_STOP, cmafSessionId });
-        this.options.ingest?.delegate.handleUploadResult?.(cmafSessionId, undefined, detail);
+        this.options.ingest?.delegate.handleUploadResult?.(cmafSessionId);
       },
       reportError: (cmafSessionId, error, detail) => {
         this.pushEvent({ type: CameraBufferEventType.CMAF_ERROR, cmafSessionId, error });
@@ -734,7 +725,12 @@ export class SecureVideoController extends EventEmitter
     this.registerRead(buffer.getCharacteristic(Characteristic.CameraRecordingPublishingPoint),
       () => this.publishingPoint ? encodeCameraRecordingPublishingPoint(this.publishingPoint).toString("base64") : "");
     this.handleTLVWrite(buffer.getCharacteristic(Characteristic.CameraRecordingPublishingPoint), value => {
-      this.publishingPoint = value.length ? decodeCameraRecordingPublishingPoint(value) : undefined;
+      const publishingPoint = value.length ? decodeCameraRecordingPublishingPoint(value) : undefined;
+      // a new publishing point is a new transport in Matter 1.6.1 terms (11.7.1.6), its session numbers start at 1
+      if (publishingPoint?.url !== this.publishingPoint?.url) {
+        this.cmafSessionNumber = 0n;
+      }
+      this.publishingPoint = publishingPoint;
       this.options.ingest?.delegate.updatePublishingPoint?.(this.publishingPoint);
       this.stateChangeDelegate?.();
       return undefined;
@@ -854,6 +850,7 @@ export class SecureVideoController extends EventEmitter
     this.recordingManagement?.handleFactoryReset();
     this.events = [];
     this.eventSequenceNumber = 0n;
+    this.cmafSessionNumber = 0n;
     this.zones = undefined;
     this.publishingPoint = undefined;
     this.privateKey = undefined;
@@ -883,6 +880,7 @@ export class SecureVideoController extends EventEmitter
       keys: [...this.keys.entries()].map(([keyNumber, key]) => ({ keyNumber: keyNumber.toString(), key: key.toString("base64") })),
       currentKeyNumber: this.currentKeyNumber?.toString(),
       eventSequenceNumber: this.eventSequenceNumber.toString(),
+      cmafSessionNumber: this.cmafSessionNumber.toString(),
     };
   }
 
@@ -912,6 +910,7 @@ export class SecureVideoController extends EventEmitter
     }
     this.currentKeyNumber = serialized.currentKeyNumber !== undefined ? BigInt(serialized.currentKeyNumber) : undefined;
     this.eventSequenceNumber = BigInt(serialized.eventSequenceNumber ?? "0");
+    this.cmafSessionNumber = BigInt(serialized.cmafSessionNumber ?? "0");
 
     this.bufferManagementService?.updateCharacteristic(Characteristic.BufferEventSequenceNumber, Number(this.eventSequenceNumber & 0xffffffffn));
     this.setClientCertificateNeedsUpdate(!this.clientCertificate);

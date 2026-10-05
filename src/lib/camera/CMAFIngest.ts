@@ -1,27 +1,22 @@
-import crypto from "crypto";
 import createDebug from "debug";
 import http2 from "http2";
 
+import { splitInitSegment, splitMediaSegment } from "./CMAFTracks";
 import { BufferUploadCommandType, CMAFError } from "./SecureVideoTypes";
 
+import type { CMAFTrack, CMAFTrackSegment } from "./CMAFTracks";
 import type { BufferUploadCommandRequest } from "./SecureVideoTypes";
 import type { CMAFRecordingDelegate, SecureVideoIngestCredentials } from "../controller/SecureVideoController";
 
 const debug = createDebug("HAP-NodeJS:SecureVideo:Ingest");
 
-const TRACK_NAME = "video";
 const FIRST_SEGMENT_NUMBER = 1001;
-const SEGMENT_DURATION_SECONDS = 2;
+const DEFAULT_SEGMENT_DURATION_SECONDS = 2;
+// Matter 1.6.1 Push AV Stream Transport: a session lasts at most five minutes, a longer recording continues in the next
+const MAX_SESSION_SECONDS = 300;
 const PLAYLIST_CONTENT_TYPE = "application/vnd.apple.mpegurl";
-
-// the HomeKit HomeHub derives the clip content key from the camera key with HKDF-SHA256, empty salt, and
-// expects every segment as AES-256-GCM with a 16-byte IV in front and the tag behind
-const CONTENT_KEY_INFO = "HomeKit 1.0 CMAF Content";
-const CONTENT_KEY_LENGTH = 32;
-const KEY_TYPE_CMAF = 1n;
-const IV_LENGTH = 16;
-const TAG_LENGTH = 16;
-const NTP_EPOCH_OFFSET_SECONDS = 2_208_988_800;
+const INIT_CONTENT_TYPE = "video/mp4";
+const SEGMENT_CONTENT_TYPE = "video/iso.segment";
 
 /**
  * Media description the controller advertises in the HLS multivariant playlist.
@@ -29,7 +24,7 @@ const NTP_EPOCH_OFFSET_SECONDS = 2_208_988_800;
  * @group Camera Secure Video
  */
 export interface CMAFMediaDescription {
-  /** HLS codecs attribute, e.g. `hvc1.1.6.L120.B0` */
+  /** HLS codecs attribute of the video, e.g. `hvc1.1.6.L120.B0` */
   codecs: string;
   width: number;
   height: number;
@@ -38,8 +33,8 @@ export interface CMAFMediaDescription {
 }
 
 /**
- * Everything the ingest needs from the controller: the negotiated credentials, the advertised media description and
- * the event reporters. Keeps the credential and event handling internal to the controller.
+ * Everything the ingest needs from the controller: the negotiated credentials, the advertised media description, the
+ * persisted session number and the event reporters. Keeps the credential and event handling internal to the controller.
  *
  * @group Camera Secure Video
  */
@@ -47,27 +42,17 @@ export interface CMAFIngestContext {
   sensorUUID: string;
   media: CMAFMediaDescription;
   credentials(): SecureVideoIngestCredentials;
+  /** the number of the next CMAF session: starts at 1 after pairing, persisted, never reused */
+  nextSessionNumber(): bigint;
   reportSessionStart(cmafSessionId: bigint): void;
-  /** `detail` summarizes the optional playlist requests, for logging only */
-  reportSessionStop(cmafSessionId: bigint, detail?: string): void;
+  reportSessionStop(cmafSessionId: bigint): void;
   /** `detail` names the failed request or the transport error, for logging only */
   reportError(cmafSessionId: bigint, error: CMAFError, detail?: string): void;
 }
 
-/**
- * Content key of one clip, derived from the camera key the HomeKit HomeHub provisioned.
- *
- * @group Camera Secure Video
- */
-export interface ClipKey {
-  /** key id as it appears in the HLS key URIs */
-  keyIdString: string;
-  contentKey: Buffer;
-}
-
 interface UploadSession {
+  /** number of the first CMAF session of the clip, the hub learns it from the upload command response */
   clipId: bigint;
-  startedAt: Date;
   abort: AbortController;
   /** no further hub command is expected, the session is dropped once the upload ends */
   finalize: boolean;
@@ -76,33 +61,51 @@ interface UploadSession {
   finished: boolean;
 }
 
+interface CMAFSession {
+  number: bigint;
+  /** publishing point path plus `session_<number>/` */
+  prefix: string;
+  startedAt: number;
+  seconds: number;
+  /** uploaded segment durations per track id */
+  durations: Map<number, number[]>;
+}
+
 interface PutResult {
   status: number;
   /** first bytes of the response body, the ingest edge explains rejections there */
   body: string;
+  /** response headers as name=value pairs, they carry the request id Apple asks for */
+  headers: string;
 }
 
-function put(client: http2.ClientHttp2Session, path: string, body: Buffer, contentType: string): Promise<PutResult> {
+function put(client: http2.ClientHttp2Session, path: string, body: Buffer, contentType: string, headers: http2.OutgoingHttpHeaders = {}): Promise<PutResult> {
   return new Promise((resolve, reject) => {
     const request = client.request({
       ":method": "PUT",
       ":path": path,
       "content-type": contentType,
       "content-length": body.length,
+      ...headers,
     });
 
     let status = 0;
+    let summary = "";
     const chunks: Buffer[] = [];
-    request.on("response", headers => {
-      status = Number(headers[":status"]);
+    request.on("response", responseHeaders => {
+      status = Number(responseHeaders[":status"]);
+      summary = Object.entries(responseHeaders)
+        .filter(([name]) => !name.startsWith(":"))
+        .map(([name, value]) => `${name}=${Array.isArray(value) ? value.join(",") : value}`)
+        .join(" ");
     });
     request.on("data", (chunk: Buffer) => {
       chunks.push(chunk);
     });
     request.on("end", () => {
       const response = Buffer.concat(chunks).toString("utf8").slice(0, 512);
-      debug("PUT %s (%d bytes) -> %d %s", path.slice(path.indexOf("session_")), body.length, status, response);
-      resolve({ status, body: response });
+      debug("PUT %s (%d bytes) -> %d %s %s", path.slice(path.indexOf("session_")), body.length, status, response, summary);
+      resolve({ status, body: response, headers: summary });
     });
     request.on("error", reject);
     request.end(body);
@@ -110,112 +113,70 @@ function put(client: http2.ClientHttp2Session, path: string, body: Buffer, conte
 }
 
 /**
- * Derives the clip content key and key id from a provisioned camera key.
+ * Formats a segment duration for the `#EXTINF` tag and the `X-EXTINF-duration` header.
  *
  * @group Camera Secure Video
  */
-export function deriveClipKey(keyNumber: bigint, cameraKey: Buffer): ClipKey {
-  const keyId = (keyNumber << 16n) | (KEY_TYPE_CMAF << 14n);
-  return {
-    keyIdString: keyId.toString(16).padStart(16, "0"),
-    contentKey: Buffer.from(crypto.hkdfSync("sha256", cameraKey, Buffer.alloc(0), CONTENT_KEY_INFO, CONTENT_KEY_LENGTH)),
-  };
-}
-
-function seal(key: ClipKey, plaintext: Buffer): { iv: Buffer, ciphertext: Buffer, tag: Buffer } {
-  const iv = crypto.randomBytes(IV_LENGTH);
-  const cipher = crypto.createCipheriv("aes-256-gcm", key.contentKey, iv, { authTagLength: TAG_LENGTH });
-  const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
-  return { iv, ciphertext, tag: cipher.getAuthTag() };
+export function formatDuration(seconds: number): string {
+  return seconds.toFixed(5);
 }
 
 /**
- * Seals an fMP4 segment for upload: 16-byte IV, AES-256-GCM ciphertext, 16-byte tag.
+ * Builds the HLS multivariant playlist of a CMAF session: one variant for the video track, audio tracks as renditions.
  *
  * @group Camera Secure Video
  */
-export function sealSegment(key: ClipKey, plaintext: Buffer): Buffer {
-  const { iv, ciphertext, tag } = seal(key, plaintext);
-  return Buffer.concat([iv, ciphertext, tag]);
-}
+export function buildMultivariantPlaylist(sensorUUID: string, media: CMAFMediaDescription, tracks: CMAFTrack[]): string {
+  const video = tracks.find(track => track.kind === "video");
+  if (!video) {
+    throw new Error("a CMAF session needs a video track");
+  }
+  const audio = tracks.filter(track => track.kind === "audio");
+  const codecs = [media.codecs, ...audio.slice(0, 1).map(track => track.codecs ?? "mp4a.40.2")].join(",");
 
-/**
- * Seals a playlist session data value: JSON with base64 fields, itself base64 inside the VALUE attribute.
- *
- * @group Camera Secure Video
- */
-export function sealSessionValue(key: ClipKey, plaintext: string): string {
-  const { iv, ciphertext, tag } = seal(key, Buffer.from(plaintext, "utf8"));
-  const value = {
-    method: "AES-256-GCM",
-    initializationVector: iv.toString("base64"),
-    ciphertext: ciphertext.toString("base64"),
-    tag: tag.toString("base64"),
-    keyIDString: key.keyIdString,
-  };
-  return Buffer.from(JSON.stringify(value)).toString("base64");
-}
-
-/**
- * Builds the HLS multivariant playlist of a clip.
- *
- * @group Camera Secure Video
- */
-export function buildMultivariantPlaylist(key: ClipKey, startedAt: Date, sensorUUID: string, media: CMAFMediaDescription): string {
-  const timestamp = startedAt.toISOString().replace(/\.\d{3}Z$/, "Z");
-  const { codecs, width, height, bitrate } = media;
-  return [
-    "#EXTM3U",
-    "#EXT-X-VERSION:7",
-    "#EXT-X-INDEPENDENT-SEGMENTS",
-    `#EXT-X-SESSION-KEY:METHOD=AES-256-GCM,URI="${key.keyIdString}"`,
-    `#EXT-X-SESSION-DATA:DATA-ID="com.apple.encrypted-datetime.timestamp",VALUE="${sealSessionValue(key, timestamp)}"`,
-    `#EXT-X-SESSION-DATA:DATA-ID="com.apple.homekit.sensor-id",VALUE="${sensorUUID}"`,
-    `#EXT-X-STREAM-INF:BANDWIDTH=${bitrate},CODECS="${codecs}",RESOLUTION=${width}x${height}`,
-    `${TRACK_NAME}/index.m3u8`,
-    "",
-  ].join("\n");
-}
-
-/**
- * Builds the HLS media playlist of a clip from the uploaded segment durations in seconds.
- *
- * @group Camera Secure Video
- */
-export function buildMediaPlaylist(key: ClipKey, durations: number[], ended: boolean): string {
-  const targetDuration = Math.ceil(Math.max(SEGMENT_DURATION_SECONDS, ...durations));
   const lines = [
     "#EXTM3U",
     "#EXT-X-VERSION:7",
-    `#EXT-X-TARGETDURATION:${targetDuration}`,
-    `#EXT-X-MEDIA-SEQUENCE:${FIRST_SEGMENT_NUMBER}`,
-    "#EXT-X-PLAYLIST-TYPE:EVENT",
     "#EXT-X-INDEPENDENT-SEGMENTS",
-    `#EXT-X-KEY:METHOD=AES-256-GCM,URI="${key.keyIdString}"`,
-    `#EXT-X-MAP:URI="${TRACK_NAME}.init"`,
+    `#EXT-X-SESSION-DATA:DATA-ID="com.apple.homekit.sensor-id",VALUE="${sensorUUID}"`,
   ];
-  durations.forEach((duration, index) => {
-    lines.push(`#EXTINF:${duration.toFixed(3)},`, `segment_${FIRST_SEGMENT_NUMBER + index}.m4s`);
+  audio.forEach((track, index) => {
+    const defaultTrack = index === 0 ? "YES" : "NO";
+    lines.push(`#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="${track.name}",DEFAULT=${defaultTrack},AUTOSELECT=YES,URI="${track.name}/index.m3u8"`);
   });
-  if (ended) {
-    lines.push("#EXT-X-ENDLIST");
-  }
-  lines.push("");
+  lines.push(
+    `#EXT-X-STREAM-INF:BANDWIDTH=${media.bitrate},CODECS="${codecs}",RESOLUTION=${media.width}x${media.height}${audio.length ? ",AUDIO=\"audio\"" : ""}`,
+    `${video.name}/index.m3u8`,
+    "",
+  );
   return lines.join("\n");
 }
 
 /**
- * Converts an NTP timestamp of the buffer upload command to a date, falling back to now.
+ * Builds the HLS media playlist of a track. Without durations it is the initial playlist that opens the track, with
+ * them the final one that lists every uploaded segment and closes it.
  *
  * @group Camera Secure Video
  */
-export function ntpToDate(ntp: bigint | undefined): Date {
-  if (ntp === undefined || ntp < 1n << 32n) {
-    return new Date();
+export function buildMediaPlaylist(track: CMAFTrack, targetDuration: number, durations?: number[]): string {
+  const target = Math.max(targetDuration, ...(durations ?? []).map(Math.round));
+  const lines = [
+    "#EXTM3U",
+    "#EXT-X-VERSION:7",
+    `#EXT-X-TARGETDURATION:${target}`,
+    `#EXT-X-MEDIA-SEQUENCE:${FIRST_SEGMENT_NUMBER}`,
+    "#EXT-X-PLAYLIST-TYPE:EVENT",
+    "#EXT-X-INDEPENDENT-SEGMENTS",
+    `#EXT-X-MAP:URI="${track.name}.init"`,
+  ];
+  if (durations) {
+    durations.forEach((duration, index) => {
+      lines.push(`#EXTINF:${formatDuration(duration)},`, `segment_${FIRST_SEGMENT_NUMBER + index}.m4s`);
+    });
+    lines.push("#EXT-X-ENDLIST");
   }
-  const seconds = Number(ntp >> 32n) - NTP_EPOCH_OFFSET_SECONDS;
-  const fraction = Number(ntp & 0xffffffffn) / 0x100000000;
-  return new Date((seconds + fraction) * 1000);
+  lines.push("");
+  return lines.join("\n");
 }
 
 function trailingSlash(pathname: string): string {
@@ -253,9 +214,10 @@ export function mapStatus(status: number): CMAFError {
 }
 
 /**
- * Uploads HomeKit Secure Video clips to the CMAF publishing point. The media is supplied by a {@link CMAFRecordingDelegate}
- * as raw fMP4 segments; this seals them, builds the HLS playlists and PUTs everything over HTTP/2 with the client
- * certificate the controller manages.
+ * Uploads HomeKit Secure Video clips to the CMAF publishing point following DASH-IF ingest interface 2 for HLS with the
+ * deviations of the Matter 1.6.1 Push AV Stream Transport cluster. The media is supplied by a
+ * {@link CMAFRecordingDelegate} as muxed fMP4; this splits it into one CMAF track per media type and PUTs the playlists
+ * and segments over HTTP/2 with the client certificate the controller manages. Segments are uploaded in the clear.
  *
  * @group Camera Secure Video
  */
@@ -285,8 +247,7 @@ export class CMAFIngest {
     }
 
     const session: UploadSession = {
-      clipId: crypto.randomBytes(8).readBigUInt64LE(),
-      startedAt: ntpToDate(request.start),
+      clipId: this.context.nextSessionNumber(),
       abort: new AbortController(),
       finalize: request.command === BufferUploadCommandType.START_AND_STOP,
       stopRequested: false,
@@ -312,18 +273,15 @@ export class CMAFIngest {
   }
 
   private async upload(request: BufferUploadCommandRequest, session: UploadSession): Promise<void> {
-    const cmafSessionId = request.sessionId;
-    const credentials = this.context.credentials();
-    const { publishingPoint, privateKey, clientCertificate, ca } = credentials;
-    const cameraKey = credentials.keys.find(entry => entry.keyNumber === credentials.currentKeyNumber) ?? credentials.keys.at(-1);
-    if (!publishingPoint || !privateKey || !clientCertificate || !cameraKey) {
+    const { publishingPoint, privateKey, clientCertificate, ca } = this.context.credentials();
+    if (!publishingPoint || !privateKey || !clientCertificate) {
       debug("upload ignored, ingest is not provisioned");
-      this.context.reportError(cmafSessionId, CMAFError.INVALID_STATE);
+      this.context.reportError(0n, CMAFError.INVALID_STATE);
       return;
     }
 
-    const clipKey = deriveClipKey(cameraKey.keyNumber, cameraKey.key);
     const url = new URL(publishingPoint.url);
+    const base = trailingSlash(url.pathname);
     const client = http2.connect(url.origin, {
       key: privateKey,
       cert: [toPem(clientCertificate), ...(ca ? [toPem(ca)] : [])].join(""),
@@ -331,88 +289,136 @@ export class CMAFIngest {
     });
     client.on("error", error => debug("http2 session error: %s", error.message));
 
-    // the ingest edge routes exactly session_<N>/index.m3u8, session_<N>/<track>/index.m3u8,
-    // session_<N>/<track>/<track>.init and session_<N>/<track>/segment_<n>.m4s
-    const base = trailingSlash(url.pathname) + `session_${cmafSessionId}/`;
-    const multivariantPath = `${base}index.m3u8`;
-    const mediaPlaylistPath = `${base}${TRACK_NAME}/index.m3u8`;
-    const initPath = `${base}${TRACK_NAME}/${TRACK_NAME}.init`;
-
-    this.context.reportSessionStart(cmafSessionId);
-    debug("session %s starting (clip %s, key %s)", cmafSessionId, session.clipId, cameraKey.keyNumber);
-
-    const clip = this.delegate.streamClip({ cmafSessionId, command: request, signal: session.abort.signal });
-    let index = 0;
+    const clip = this.delegate.streamClip({ command: request, signal: session.abort.signal });
+    let current: CMAFSession | undefined;
     try {
       const first = await clip.next();
       if (first.done || first.value.type !== "init") {
         throw new Error("delegate did not yield an init segment first");
       }
-
-      const media = first.value.media ?? this.context.media;
-      const startedAt = first.value.startedAt ?? session.startedAt;
-      const durations: number[] = [];
-      const notes: string[] = [];
-
-      if (!(await this.putChecked(cmafSessionId, client, initPath, sealSegment(clipKey, first.value.data), "video/mp4"))) {
-        return;
+      const tracks = splitInitSegment(first.value.data);
+      if (!tracks.some(track => track.kind === "video")) {
+        throw new Error("init segment without a video track");
       }
-      // DASH-IF ingest interface 1 takes the init and media segments only, the playlists are interface 2 extras the
-      // publishing point may reject, so their outcome is reported but does not end the upload
-      await this.putOptional(client, mediaPlaylistPath, Buffer.from(buildMediaPlaylist(clipKey, durations, false)), PLAYLIST_CONTENT_TYPE, notes);
-      const multivariant = Buffer.from(buildMultivariantPlaylist(clipKey, startedAt, this.context.sensorUUID, media));
-      await this.putOptional(client, multivariantPath, multivariant, PLAYLIST_CONTENT_TYPE, notes);
+      const media = first.value.media ?? this.context.media;
+      let targetDuration: number | undefined;
+      let reservedNumber: bigint | undefined = session.clipId;
 
-      let finished = false;
       for await (const segment of clip) {
         if (segment.type !== "media") {
           continue;
         }
-        const segmentPath = `${base}${TRACK_NAME}/segment_${FIRST_SEGMENT_NUMBER + index}.m4s`;
-        if (!(await this.putChecked(cmafSessionId, client, segmentPath, sealSegment(clipKey, segment.data), "video/iso.segment"))) {
-          return;
+        const fallback = segment.duration ?? DEFAULT_SEGMENT_DURATION_SECONDS;
+        const parts = splitMediaSegment(segment.data, tracks).map(part => (part.duration > 0 ? part : { ...part, duration: fallback }));
+        const duration = parts.reduce((longest, part) => Math.max(longest, part.duration), 0);
+        // the target duration must not change once announced, the headroom absorbs keyframe jitter
+        targetDuration ??= Math.ceil(duration) + 1;
+
+        if (current && (current.seconds + duration > MAX_SESSION_SECONDS || Date.now() - current.startedAt >= MAX_SESSION_SECONDS * 1000)) {
+          const ended = await this.endSession(client, current, tracks, targetDuration);
+          current = undefined;
+          if (!ended) {
+            return;
+          }
         }
-        index++;
-        durations.push(segment.duration ?? SEGMENT_DURATION_SECONDS);
-        finished = session.stopRequested || !!segment.last;
-        await this.putOptional(client, mediaPlaylistPath, Buffer.from(buildMediaPlaylist(clipKey, durations, finished)), PLAYLIST_CONTENT_TYPE, notes);
-        if (finished) {
+        if (!current) {
+          current = await this.beginSession(client, base, tracks, media, targetDuration, reservedNumber ?? this.context.nextSessionNumber());
+          reservedNumber = undefined;
+          if (!current) {
+            return;
+          }
+        }
+
+        for (const part of parts) {
+          if (!(await this.putSegment(client, current, part))) {
+            return;
+          }
+        }
+        current.seconds += duration;
+        if (session.stopRequested || segment.last) {
           break;
         }
       }
 
-      // the generator ended on its own (source stopped or reached the stop timestamp) without a final fragment flag
-      if (!finished) {
-        await this.putOptional(client, mediaPlaylistPath, Buffer.from(buildMediaPlaylist(clipKey, durations, true)), PLAYLIST_CONTENT_TYPE, notes);
+      if (current) {
+        const ended = await this.endSession(client, current, tracks, targetDuration!);
+        current = undefined;
+        if (!ended) {
+          return;
+        }
       }
-
-      this.context.reportSessionStop(cmafSessionId, notes.length ? notes.join(" | ") : undefined);
-      debug("session %s finished after %d segments", cmafSessionId, index);
+      debug("upload of clip %s finished", session.clipId);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      debug("session %s failed: %s", cmafSessionId, message);
-      this.context.reportError(cmafSessionId, CMAFError.CONNECTION_FAILED, message);
+      debug("upload of clip %s failed: %s", session.clipId, message);
+      this.context.reportError(current?.number ?? 0n, CMAFError.CONNECTION_FAILED, message);
     } finally {
       await clip.return?.(undefined).catch(() => undefined);
       client.close();
     }
   }
 
-  private async putOptional(client: http2.ClientHttp2Session, path: string, body: Buffer, contentType: string, notes: string[]): Promise<void> {
-    const result = await put(client, path, body, contentType);
-    const note = `PUT ${path.slice(path.indexOf("session_"))} -> ${result.status}${result.body ? ` ${result.body}` : ""}`;
-    if (!notes.includes(note)) {
-      notes.push(note);
+  private async beginSession(client: http2.ClientHttp2Session, base: string, tracks: CMAFTrack[], media: CMAFMediaDescription,
+    targetDuration: number, number: bigint): Promise<CMAFSession | undefined> {
+    const session: CMAFSession = {
+      number,
+      prefix: `${base}session_${number}/`,
+      startedAt: Date.now(),
+      seconds: 0,
+      durations: new Map(tracks.map(track => [track.id, []])),
+    };
+    this.context.reportSessionStart(number);
+    debug("session %s starting with tracks %s", number, tracks.map(track => track.name).join(", "));
+
+    const multivariant = Buffer.from(buildMultivariantPlaylist(this.context.sensorUUID, media, tracks));
+    if (!(await this.putChecked(client, session, `${session.prefix}index.m3u8`, multivariant, PLAYLIST_CONTENT_TYPE))) {
+      return undefined;
     }
+    for (const track of tracks) {
+      const playlist = Buffer.from(buildMediaPlaylist(track, targetDuration));
+      if (!(await this.putChecked(client, session, `${session.prefix}${track.name}/index.m3u8`, playlist, PLAYLIST_CONTENT_TYPE))) {
+        return undefined;
+      }
+    }
+    for (const track of tracks) {
+      if (!(await this.putChecked(client, session, `${session.prefix}${track.name}/${track.name}.init`, track.init, INIT_CONTENT_TYPE))) {
+        return undefined;
+      }
+    }
+    return session;
   }
 
-  private async putChecked(cmafSessionId: bigint, client: http2.ClientHttp2Session, path: string, body: Buffer, contentType: string): Promise<boolean> {
-    const result = await put(client, path, body, contentType);
+  private async putSegment(client: http2.ClientHttp2Session, session: CMAFSession, part: CMAFTrackSegment): Promise<boolean> {
+    const durations = session.durations.get(part.track.id)!;
+    const path = `${session.prefix}${part.track.name}/segment_${FIRST_SEGMENT_NUMBER + durations.length}.m4s`;
+    const uploaded = await this.putChecked(client, session, path, part.data, SEGMENT_CONTENT_TYPE, { "x-extinf-duration": formatDuration(part.duration) });
+    if (uploaded) {
+      durations.push(part.duration);
+    }
+    return uploaded;
+  }
+
+  private async endSession(client: http2.ClientHttp2Session, session: CMAFSession, tracks: CMAFTrack[], targetDuration: number): Promise<boolean> {
+    for (const track of tracks) {
+      const playlist = Buffer.from(buildMediaPlaylist(track, targetDuration, session.durations.get(track.id)));
+      if (!(await this.putChecked(client, session, `${session.prefix}${track.name}/index.m3u8`, playlist, PLAYLIST_CONTENT_TYPE))) {
+        return false;
+      }
+    }
+    this.context.reportSessionStop(session.number);
+    debug("session %s finished after %ds", session.number, Math.round(session.seconds));
+    return true;
+  }
+
+  private async putChecked(client: http2.ClientHttp2Session, session: CMAFSession, path: string, body: Buffer, contentType: string,
+    headers?: http2.OutgoingHttpHeaders): Promise<boolean> {
+    const result = await put(client, path, body, contentType, headers);
     if (result.status >= 200 && result.status < 300) {
       return true;
     }
-    const detail = `PUT ${path.slice(path.indexOf("session_"))} (${body.length} bytes) -> ${result.status} ${result.body}`.trim();
-    this.context.reportError(cmafSessionId, mapStatus(result.status), detail);
+    const response = [result.body, result.headers].filter(Boolean).join(" ");
+    const detail = `PUT ${path.slice(path.indexOf("session_"))} (${body.length} bytes) -> ${result.status} ${response}`;
+    this.context.reportError(session.number, mapStatus(result.status), detail);
     return false;
   }
 }

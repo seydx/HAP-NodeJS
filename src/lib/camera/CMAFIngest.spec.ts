@@ -44,7 +44,7 @@ function fakeClient(requests: Request[], status: (path: string) => number, close
           body: body.toString("latin1"),
         });
         setImmediate(() => {
-          stream.emit("response", { ":status": status(path) });
+          stream.emit("response", { ":status": status(path), "x-apple-request-uuid": "4f1c" });
           stream.emit("end");
         });
       };
@@ -56,6 +56,7 @@ function fakeClient(requests: Request[], status: (path: string) => number, close
 function setup(segments: CMAFSegment[], status: (path: string) => number = () => 201) {
   const requests: Request[] = [];
   const events: string[] = [];
+  const errors: string[] = [];
   let sessionNumber = 0n;
 
   // the upload closes the client as its very last step
@@ -80,14 +81,20 @@ function setup(segments: CMAFSegment[], status: (path: string) => number = () =>
       keys: [],
     }) as unknown as SecureVideoIngestCredentials,
     nextSessionNumber: () => ++sessionNumber,
-    reportSessionStart: number => events.push(`start ${number}`),
+    reportSessionStart: async number => {
+      events.push(`start ${number}`);
+      return true;
+    },
     reportSessionStop: number => events.push(`stop ${number}`),
-    reportError: (number, error) => events.push(`error ${number} ${error}`),
+    reportError: (number, error, detail) => {
+      events.push(`error ${number} ${error}`);
+      errors.push(detail ?? "");
+    },
   };
 
   const ingest = new CMAFIngest(delegate, context);
-  ingest.handleUploadCommand({ sessionId: 99n, command: BufferUploadCommandType.START_AND_STOP });
-  return { requests, events, done };
+  const clipId = ingest.handleUploadCommand({ sessionId: 99n, command: BufferUploadCommandType.START_AND_STOP });
+  return { requests, events, errors, clipId, done };
 }
 
 afterEach(() => {
@@ -137,7 +144,7 @@ describe("CMAFIngest", () => {
   });
 
   test("uploads a clip in the order of the Matter HLS ingest", async () => {
-    const { requests, events, done } = setup([
+    const { requests, events, clipId, done } = setup([
       { type: "init", data: initSegment([VIDEO, AUDIO]) },
       { type: "media", data: fragment(4) },
       { type: "media", data: fragment(4), last: true },
@@ -160,6 +167,8 @@ describe("CMAFIngest", () => {
     expect(requests[1].body).not.toContain("#EXT-X-ENDLIST");
     expect(requests[9].body).toContain("segment_1002.m4s\n#EXT-X-ENDLIST");
     expect(events).toEqual(["start 1", "stop 1"]);
+    // the hub links the upload to its clip through the first CMAF session number
+    expect(clipId).toBe(1n);
   });
 
   test("continues a recording longer than five minutes in the next session", async () => {
@@ -190,7 +199,7 @@ describe("CMAFIngest", () => {
   });
 
   test("stops at the first rejected request", async () => {
-    const { requests, events, done } = setup([
+    const { requests, events, errors, done } = setup([
       { type: "init", data: initSegment([VIDEO, AUDIO]) },
       { type: "media", data: fragment(4), last: true },
     ], path => (path.endsWith("video/index.m3u8") ? 400 : 201));
@@ -198,6 +207,7 @@ describe("CMAFIngest", () => {
 
     expect(requests.map(request => request.path)).toEqual(["session_1/index.m3u8", "session_1/video/index.m3u8"]);
     expect(events).toEqual(["start 1", `error 1 ${CMAFError.HTTP_BAD_REQUEST}`]);
+    expect(errors[0]).toMatch(/^PUT session_1\/video\/index\.m3u8 \(\d+ bytes\) -> 400 x-apple-request-uuid=4f1c, hub fetched the session start after \d+ms$/);
   });
 
   test("maps http statuses to cmaf errors", () => {

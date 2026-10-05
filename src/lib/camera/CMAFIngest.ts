@@ -1,4 +1,3 @@
-import crypto from "crypto";
 import createDebug from "debug";
 import http2 from "http2";
 
@@ -45,13 +44,15 @@ export interface CMAFIngestContext {
   credentials(): SecureVideoIngestCredentials;
   /** the number of the next CMAF session: starts at 1 after pairing, persisted, never reused */
   nextSessionNumber(): bigint;
-  reportSessionStart(cmafSessionId: bigint): void;
+  /** resolves true once the HomeKit HomeHub fetched the session start event, false when it did not in time */
+  reportSessionStart(cmafSessionId: bigint): Promise<boolean>;
   reportSessionStop(cmafSessionId: bigint): void;
   /** `detail` names the failed request or the transport error, for logging only */
   reportError(cmafSessionId: bigint, error: CMAFError, detail?: string): void;
 }
 
 interface UploadSession {
+  /** number of the first CMAF session of the clip, the hub learns it from the upload command response */
   clipId: bigint;
   abort: AbortController;
   /** no further hub command is expected, the session is dropped once the upload ends */
@@ -69,12 +70,16 @@ interface CMAFSession {
   seconds: number;
   /** uploaded segment durations per track id */
   durations: Map<number, number[]>;
+  /** how the hub took the session start event, added to rejection details */
+  note: string;
 }
 
 interface PutResult {
   status: number;
   /** first bytes of the response body, the ingest edge explains rejections there */
   body: string;
+  /** response headers as name=value pairs, they carry the request id Apple asks for */
+  headers: string;
 }
 
 function put(client: http2.ClientHttp2Session, path: string, body: Buffer, contentType: string, headers: http2.OutgoingHttpHeaders = {}): Promise<PutResult> {
@@ -88,17 +93,22 @@ function put(client: http2.ClientHttp2Session, path: string, body: Buffer, conte
     });
 
     let status = 0;
+    let summary = "";
     const chunks: Buffer[] = [];
     request.on("response", responseHeaders => {
       status = Number(responseHeaders[":status"]);
+      summary = Object.entries(responseHeaders)
+        .filter(([name]) => !name.startsWith(":"))
+        .map(([name, value]) => `${name}=${Array.isArray(value) ? value.join(",") : value}`)
+        .join(" ");
     });
     request.on("data", (chunk: Buffer) => {
       chunks.push(chunk);
     });
     request.on("end", () => {
       const response = Buffer.concat(chunks).toString("utf8").slice(0, 512);
-      debug("PUT %s (%d bytes) -> %d %s", path.slice(path.indexOf("session_")), body.length, status, response);
-      resolve({ status, body: response });
+      debug("PUT %s (%d bytes) -> %d %s %s", path.slice(path.indexOf("session_")), body.length, status, response, summary);
+      resolve({ status, body: response, headers: summary });
     });
     request.on("error", reject);
     request.end(body);
@@ -240,7 +250,7 @@ export class CMAFIngest {
     }
 
     const session: UploadSession = {
-      clipId: crypto.randomBytes(8).readBigUInt64LE(),
+      clipId: this.context.nextSessionNumber(),
       abort: new AbortController(),
       finalize: request.command === BufferUploadCommandType.START_AND_STOP,
       stopRequested: false,
@@ -295,6 +305,7 @@ export class CMAFIngest {
       }
       const media = first.value.media ?? this.context.media;
       let targetDuration: number | undefined;
+      let reservedNumber: bigint | undefined = session.clipId;
 
       for await (const segment of clip) {
         if (segment.type !== "media") {
@@ -314,7 +325,8 @@ export class CMAFIngest {
           }
         }
         if (!current) {
-          current = await this.beginSession(client, base, tracks, media, targetDuration);
+          current = await this.beginSession(client, base, tracks, media, targetDuration, reservedNumber ?? this.context.nextSessionNumber());
+          reservedNumber = undefined;
           if (!current) {
             return;
           }
@@ -350,17 +362,19 @@ export class CMAFIngest {
   }
 
   private async beginSession(client: http2.ClientHttp2Session, base: string, tracks: CMAFTrack[], media: CMAFMediaDescription,
-    targetDuration: number): Promise<CMAFSession | undefined> {
-    const number = this.context.nextSessionNumber();
+    targetDuration: number, number: bigint): Promise<CMAFSession | undefined> {
+    const reportedAt = Date.now();
+    const fetched = await this.context.reportSessionStart(number);
+    const waited = Date.now() - reportedAt;
     const session: CMAFSession = {
       number,
       prefix: `${base}session_${number}/`,
       startedAt: Date.now(),
       seconds: 0,
       durations: new Map(tracks.map(track => [track.id, []])),
+      note: fetched ? `hub fetched the session start after ${waited}ms` : `hub did not fetch the session start within ${waited}ms`,
     };
-    this.context.reportSessionStart(number);
-    debug("session %s starting with tracks %s", number, tracks.map(track => track.name).join(", "));
+    debug("session %s starting with tracks %s, %s", number, tracks.map(track => track.name).join(", "), session.note);
 
     const multivariant = Buffer.from(buildMultivariantPlaylist(this.context.sensorUUID, media, tracks));
     if (!(await this.putChecked(client, session, `${session.prefix}index.m3u8`, multivariant, PLAYLIST_CONTENT_TYPE))) {
@@ -408,7 +422,8 @@ export class CMAFIngest {
     if (result.status >= 200 && result.status < 300) {
       return true;
     }
-    const detail = `PUT ${path.slice(path.indexOf("session_"))} (${body.length} bytes) -> ${result.status} ${result.body}`.trim();
+    const response = [result.body, result.headers].filter(Boolean).join(" ");
+    const detail = `PUT ${path.slice(path.indexOf("session_"))} (${body.length} bytes) -> ${result.status} ${response}, ${session.note}`;
     this.context.reportError(session.number, mapStatus(result.status), detail);
     return false;
   }

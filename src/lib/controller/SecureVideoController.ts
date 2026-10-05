@@ -102,6 +102,9 @@ import type { CameraRecordingDelegate } from "./CameraController";
 const debug = createDebug("HAP-NodeJS:SecureVideo:Controller");
 
 const MAX_QUEUED_EVENTS = 256;
+// the HomeKit HomeHub links an upload to its clip through the CMAF session start event, so the upload waits until the
+// hub fetched it; a hub that does not query in time does not block the recording
+const SESSION_START_DELIVERY_TIMEOUT = 5000;
 const DEFAULT_MAX_WEBRTC_SESSIONS = 6;
 // same budget as the image resource request of the CameraController (8s slow warning + 17s abort)
 const SNAPSHOT_TIMEOUT_MS = 25000;
@@ -445,6 +448,7 @@ export class SecureVideoController extends EventEmitter
 
   private events: CameraBufferEvent[] = [];
   private eventSequenceNumber = 0n;
+  private readonly deliveryWaiters = new Set<{ sequenceNumber: bigint, timer?: NodeJS.Timeout, resolve: (delivered: boolean) => void }>();
   // last CMAF session number used for an upload, the publishing point needs it unique and increasing since pairing
   private cmafSessionNumber = 0n;
 
@@ -715,7 +719,7 @@ export class SecureVideoController extends EventEmitter
         this.stateChangeDelegate?.();
         return this.cmafSessionNumber;
       },
-      reportSessionStart: cmafSessionId => this.pushEvent({ type: CameraBufferEventType.CMAF_SESSION_START, cmafSessionId }),
+      reportSessionStart: cmafSessionId => this.waitForDelivery(this.pushEvent({ type: CameraBufferEventType.CMAF_SESSION_START, cmafSessionId })),
       reportSessionStop: cmafSessionId => {
         this.pushEvent({ type: CameraBufferEventType.CMAF_SESSION_STOP, cmafSessionId });
         this.options.ingest?.delegate.handleUploadResult?.(cmafSessionId);
@@ -857,6 +861,9 @@ export class SecureVideoController extends EventEmitter
       this.endWebRTCSession(sessionIdentifier).catch(error => debug("failed to end session %s: %s", sessionIdentifier, error));
     }
     this.recordingManagement?.handleFactoryReset();
+    for (const waiter of [...this.deliveryWaiters]) {
+      waiter.resolve(false);
+    }
     this.events = [];
     this.eventSequenceNumber = 0n;
     this.cmafSessionNumber = 0n;
@@ -1050,7 +1057,7 @@ export class SecureVideoController extends EventEmitter
     this.webrtcStreamManagementService?.updateCharacteristic(Characteristic.WebRTCNumberOfActiveSessions, Math.min(255, this.webrtcSessions.size));
   }
 
-  private pushEvent(event: CameraBufferEventInput): void {
+  private pushEvent(event: CameraBufferEventInput): bigint {
     this.eventSequenceNumber += 1n;
     const queued = { ...event, sequenceNumber: this.eventSequenceNumber } as CameraBufferEvent;
     this.events.push(queued);
@@ -1061,6 +1068,31 @@ export class SecureVideoController extends EventEmitter
     debug("queued buffer event %o", queued);
     this.bufferManagementService?.updateCharacteristic(Characteristic.BufferEventSequenceNumber, Number(this.eventSequenceNumber & 0xffffffffn));
     this.stateChangeDelegate?.();
+    return queued.sequenceNumber;
+  }
+
+  /** Resolves true once the HomeKit HomeHub fetched or acknowledged the event, false after the timeout. */
+  private waitForDelivery(sequenceNumber: bigint): Promise<boolean> {
+    return new Promise(resolve => {
+      const waiter: { sequenceNumber: bigint, timer?: NodeJS.Timeout, resolve: (delivered: boolean) => void } = {
+        sequenceNumber,
+        resolve: delivered => {
+          clearTimeout(waiter.timer);
+          this.deliveryWaiters.delete(waiter);
+          resolve(delivered);
+        },
+      };
+      waiter.timer = setTimeout(() => waiter.resolve(false), SESSION_START_DELIVERY_TIMEOUT);
+      this.deliveryWaiters.add(waiter);
+    });
+  }
+
+  private settleDeliveries(upTo: bigint): void {
+    for (const waiter of [...this.deliveryWaiters]) {
+      if (waiter.sequenceNumber <= upTo) {
+        waiter.resolve(true);
+      }
+    }
   }
 
   private handleBufferEventCommand(value: Buffer): Buffer {
@@ -1070,12 +1102,18 @@ export class SecureVideoController extends EventEmitter
     if (request.command === BufferEventCommandType.ACKNOWLEDGE) {
       const acknowledged = request.sequenceNumber ?? this.eventSequenceNumber;
       this.events = this.events.filter(event => event.sequenceNumber > acknowledged);
+      this.settleDeliveries(acknowledged);
       return encodeBufferEventCommandResponse([]);
     }
 
     const from = request.sequenceNumber ?? 0n;
     const limit = request.limit && request.limit > 0n ? Number(request.limit) : this.events.length;
-    return encodeBufferEventCommandResponse(this.events.filter(event => event.sequenceNumber >= from).slice(0, limit));
+    const events = this.events.filter(event => event.sequenceNumber >= from).slice(0, limit);
+    const last = events.at(-1);
+    if (last) {
+      this.settleDeliveries(last.sequenceNumber);
+    }
+    return encodeBufferEventCommandResponse(events);
   }
 
   private handleBufferUpload(value: Buffer): Buffer {

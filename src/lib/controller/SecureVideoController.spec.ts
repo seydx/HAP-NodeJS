@@ -283,12 +283,45 @@ describe("SecureVideoController", () => {
     expect(hds.getService(Service.CameraClientCertificateManagement)).toBeUndefined();
   });
 
-  test("buffer upload returns a generated clip id", async () => {
-    const response = await controller.bufferManagementService!.getCharacteristic(Characteristic.BufferUploadCommand).handleSetRequest(
-      Buffer.concat([tlv(1, [1]), tlv(2, [1])]).toString("base64"));
+  test("buffer upload answers with the first cmaf session number as clip id", async () => {
+    const upload = controller.bufferManagementService!.getCharacteristic(Characteristic.BufferUploadCommand);
+    const response = await upload.handleSetRequest(Buffer.concat([tlv(1, [1]), tlv(2, [1])]).toString("base64"));
     const decoded = Buffer.from(String(response), "base64");
     expect(decoded[0]).toBe(1);   // TLV type: clip id
     expect(decoded[1]).toBe(8);   // encoded as a uint64
-    expect(decoded.subarray(2, 10)).not.toEqual(Buffer.alloc(8));
+    expect(decoded.readBigUInt64LE(2)).toBe(1n);
+    expect(controller.serialize()!.cmafSessionNumber).toBe("1");
+
+    const next = await upload.handleSetRequest(Buffer.concat([tlv(1, [2]), tlv(2, [1])]).toString("base64"));
+    expect(Buffer.from(String(next), "base64").readBigUInt64LE(2)).toBe(2n);
+
+    controller.handleFactoryReset();
+    expect(controller.serialize()!.cmafSessionNumber).toBe("0");
+  });
+
+  test("waits until the hub fetched or acknowledged an event", async () => {
+    const command = controller.bufferManagementService!.getCharacteristic(Characteristic.BufferEventCommand);
+    const internals = controller as unknown as {
+      pushEvent(event: { type: CameraBufferEventType, cmafSessionId: bigint }): bigint;
+      waitForDelivery(sequenceNumber: bigint): Promise<boolean>;
+    };
+    const push = (cmafSessionId: bigint) => internals.pushEvent({ type: CameraBufferEventType.CMAF_SESSION_START, cmafSessionId });
+
+    const queried = internals.waitForDelivery(push(1n));
+    await command.handleSetRequest(Buffer.concat([tlv(1, [BufferEventCommandType.QUERY]), tlv(2, [1])]).toString("base64"));
+    await expect(queried).resolves.toBe(true);
+
+    const acknowledged = internals.waitForDelivery(push(2n));
+    await command.handleSetRequest(Buffer.concat([tlv(1, [BufferEventCommandType.ACKNOWLEDGE]), tlv(2, [2])]).toString("base64"));
+    await expect(acknowledged).resolves.toBe(true);
+
+    jest.useFakeTimers();
+    try {
+      const unanswered = internals.waitForDelivery(push(3n));
+      jest.advanceTimersByTime(5000);
+      await expect(unanswered).resolves.toBe(false);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });

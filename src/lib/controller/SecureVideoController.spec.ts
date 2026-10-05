@@ -298,30 +298,4 @@ describe("SecureVideoController", () => {
     controller.handleFactoryReset();
     expect(controller.serialize()!.cmafSessionNumber).toBe("0");
   });
-
-  test("waits until the hub fetched or acknowledged an event", async () => {
-    const command = controller.bufferManagementService!.getCharacteristic(Characteristic.BufferEventCommand);
-    const internals = controller as unknown as {
-      pushEvent(event: { type: CameraBufferEventType, cmafSessionId: bigint }): bigint;
-      waitForDelivery(sequenceNumber: bigint): Promise<boolean>;
-    };
-    const push = (cmafSessionId: bigint) => internals.pushEvent({ type: CameraBufferEventType.CMAF_SESSION_START, cmafSessionId });
-
-    const queried = internals.waitForDelivery(push(1n));
-    await command.handleSetRequest(Buffer.concat([tlv(1, [BufferEventCommandType.QUERY]), tlv(2, [1])]).toString("base64"));
-    await expect(queried).resolves.toBe(true);
-
-    const acknowledged = internals.waitForDelivery(push(2n));
-    await command.handleSetRequest(Buffer.concat([tlv(1, [BufferEventCommandType.ACKNOWLEDGE]), tlv(2, [2])]).toString("base64"));
-    await expect(acknowledged).resolves.toBe(true);
-
-    jest.useFakeTimers();
-    try {
-      const unanswered = internals.waitForDelivery(push(3n));
-      jest.advanceTimersByTime(5000);
-      await expect(unanswered).resolves.toBe(false);
-    } finally {
-      jest.useRealTimers();
-    }
-  });
 });

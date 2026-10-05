@@ -448,7 +448,6 @@ export class SecureVideoController extends EventEmitter
 
   private events: CameraBufferEvent[] = [];
   private eventSequenceNumber = 0n;
-  private readonly deliveryWaiters = new Set<{ sequenceNumber: bigint, timer?: NodeJS.Timeout, resolve: (delivered: boolean) => void }>();
   // last CMAF session number used for an upload, the publishing point needs it unique and increasing since pairing
   private cmafSessionNumber = 0n;
 
@@ -719,7 +718,7 @@ export class SecureVideoController extends EventEmitter
         this.stateChangeDelegate?.();
         return this.cmafSessionNumber;
       },
-      reportSessionStart: cmafSessionId => this.waitForDelivery(this.pushEvent({ type: CameraBufferEventType.CMAF_SESSION_START, cmafSessionId })),
+      reportSessionStart: cmafSessionId => this.pushEvent({ type: CameraBufferEventType.CMAF_SESSION_START, cmafSessionId }),
       reportSessionStop: cmafSessionId => {
         this.pushEvent({ type: CameraBufferEventType.CMAF_SESSION_STOP, cmafSessionId });
         this.options.ingest?.delegate.handleUploadResult?.(cmafSessionId);

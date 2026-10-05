@@ -44,8 +44,7 @@ export interface CMAFIngestContext {
   credentials(): SecureVideoIngestCredentials;
   /** the number of the next CMAF session: starts at 1 after pairing, persisted, never reused */
   nextSessionNumber(): bigint;
-  /** resolves true once the HomeKit HomeHub fetched the session start event, false when it did not in time */
-  reportSessionStart(cmafSessionId: bigint): Promise<boolean>;
+  reportSessionStart(cmafSessionId: bigint): void;
   reportSessionStop(cmafSessionId: bigint): void;
   /** `detail` names the failed request or the transport error, for logging only */
   reportError(cmafSessionId: bigint, error: CMAFError, detail?: string): void;
@@ -70,8 +69,6 @@ interface CMAFSession {
   seconds: number;
   /** uploaded segment durations per track id */
   durations: Map<number, number[]>;
-  /** how the hub took the session start event, added to rejection details */
-  note: string;
 }
 
 interface PutResult {
@@ -363,18 +360,15 @@ export class CMAFIngest {
 
   private async beginSession(client: http2.ClientHttp2Session, base: string, tracks: CMAFTrack[], media: CMAFMediaDescription,
     targetDuration: number, number: bigint): Promise<CMAFSession | undefined> {
-    const reportedAt = Date.now();
-    const fetched = await this.context.reportSessionStart(number);
-    const waited = Date.now() - reportedAt;
     const session: CMAFSession = {
       number,
       prefix: `${base}session_${number}/`,
       startedAt: Date.now(),
       seconds: 0,
       durations: new Map(tracks.map(track => [track.id, []])),
-      note: fetched ? `hub fetched the session start after ${waited}ms` : `hub did not fetch the session start within ${waited}ms`,
     };
-    debug("session %s starting with tracks %s, %s", number, tracks.map(track => track.name).join(", "), session.note);
+    this.context.reportSessionStart(number);
+    debug("session %s starting with tracks %s", number, tracks.map(track => track.name).join(", "));
 
     const multivariant = Buffer.from(buildMultivariantPlaylist(this.context.sensorUUID, media, tracks));
     if (!(await this.putChecked(client, session, `${session.prefix}index.m3u8`, multivariant, PLAYLIST_CONTENT_TYPE))) {
@@ -423,7 +417,7 @@ export class CMAFIngest {
       return true;
     }
     const response = [result.body, result.headers].filter(Boolean).join(" ");
-    const detail = `PUT ${path.slice(path.indexOf("session_"))} (${body.length} bytes) -> ${result.status} ${response}, ${session.note}`;
+    const detail = `PUT ${path.slice(path.indexOf("session_"))} (${body.length} bytes) -> ${result.status} ${response}`;
     this.context.reportError(session.number, mapStatus(result.status), detail);
     return false;
   }

@@ -81,10 +81,7 @@ function setup(segments: CMAFSegment[], status: (path: string) => number = () =>
       keys: [],
     }) as unknown as SecureVideoIngestCredentials,
     nextSessionNumber: () => ++sessionNumber,
-    reportSessionStart: async number => {
-      events.push(`start ${number}`);
-      return true;
-    },
+    reportSessionStart: number => events.push(`start ${number}`),
     reportSessionStop: number => events.push(`stop ${number}`),
     reportError: (number, error, detail) => {
       events.push(`error ${number} ${error}`);
@@ -207,7 +204,7 @@ describe("CMAFIngest", () => {
 
     expect(requests.map(request => request.path)).toEqual(["session_1/index.m3u8", "session_1/video/index.m3u8"]);
     expect(events).toEqual(["start 1", `error 1 ${CMAFError.HTTP_BAD_REQUEST}`]);
-    expect(errors[0]).toMatch(/^PUT session_1\/video\/index\.m3u8 \(\d+ bytes\) -> 400 x-apple-request-uuid=4f1c, hub fetched the session start after \d+ms$/);
+    expect(errors[0]).toMatch(/^PUT session_1\/video\/index\.m3u8 \(\d+ bytes\) -> 400 x-apple-request-uuid=4f1c$/);
   });
 
   test("maps http statuses to cmaf errors", () => {

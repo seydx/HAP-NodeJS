@@ -102,6 +102,9 @@ import type { CameraRecordingDelegate } from "./CameraController";
 const debug = createDebug("HAP-NodeJS:SecureVideo:Controller");
 
 const MAX_QUEUED_EVENTS = 256;
+// the HomeKit HomeHub links an upload to its clip through the CMAF session start event, so the upload waits until the
+// hub fetched it; a hub that does not query in time does not block the recording
+const SESSION_START_DELIVERY_TIMEOUT = 5000;
 const DEFAULT_MAX_WEBRTC_SESSIONS = 6;
 // same budget as the image resource request of the CameraController (8s slow warning + 17s abort)
 const SNAPSHOT_TIMEOUT_MS = 25000;
@@ -231,8 +234,8 @@ export interface CMAFRecordingDelegate {
   updatePublishingPoint?(publishingPoint: CameraRecordingPublishingPointValue | undefined): void;
   updateClientCertificate?(installed: boolean): void;
   /**
-   * the upload session ended, `error` is set when it failed (the HomeKit HomeHub gets the same as a CMAF error event);
-   * `detail` names the failed request or transport error, or summarizes the playlist requests of a finished upload
+   * a CMAF session ended, `error` is set when it failed (the HomeKit HomeHub gets the same as a CMAF error event);
+   * `detail` names the failed request or transport error
    */
   handleUploadResult?(cmafSessionId: bigint, error?: CMAFError, detail?: string): void;
 }
@@ -241,7 +244,6 @@ export interface CMAFRecordingDelegate {
  * @group Camera Secure Video
  */
 export interface CMAFClipRequest {
-  cmafSessionId: bigint;
   command: BufferUploadCommandRequest;
   /** aborted when the HomeKit HomeHub stops the upload */
   signal: AbortSignal;
@@ -252,13 +254,11 @@ export interface CMAFClipRequest {
  */
 export interface CMAFSegment {
   type: "init" | "media";
-  /** raw fMP4; the controller seals it before upload */
+  /** muxed fMP4 (ftyp + moov, or [prft] moof mdat); the controller splits it into one CMAF track per media type */
   data: Buffer;
   /** on the init segment: the actual media description for the HLS playlists, overriding the controller default */
   media?: CMAFMediaDescription;
-  /** on the init segment: wall clock of the first media fragment, defaults to the start of the upload command */
-  startedAt?: Date;
-  /** media fragment duration in seconds, defaults to 2 */
+  /** media fragment duration in seconds, used when the fragment carries no sample durations, defaults to 2 */
   duration?: number;
   /** set on the last media fragment */
   last?: boolean;
@@ -377,6 +377,7 @@ export interface SecureVideoControllerState {
   keys: { keyNumber: string, key: string }[];
   currentKeyNumber?: string;
   eventSequenceNumber: string;
+  cmafSessionNumber?: string;
 }
 
 /**
@@ -447,6 +448,9 @@ export class SecureVideoController extends EventEmitter
 
   private events: CameraBufferEvent[] = [];
   private eventSequenceNumber = 0n;
+  private readonly deliveryWaiters = new Set<{ sequenceNumber: bigint, timer?: NodeJS.Timeout, resolve: (delivered: boolean) => void }>();
+  // last CMAF session number used for an upload, the publishing point needs it unique and increasing since pairing
+  private cmafSessionNumber = 0n;
 
   private zones?: CameraZonesValue;
   private publishingPoint?: CameraRecordingPublishingPointValue;
@@ -710,10 +714,15 @@ export class SecureVideoController extends EventEmitter
       sensorUUID: this.options.sensor.uuid,
       media: this.ingestMediaDescription(),
       credentials: () => this.ingestCredentials(),
-      reportSessionStart: cmafSessionId => this.pushEvent({ type: CameraBufferEventType.CMAF_SESSION_START, cmafSessionId }),
-      reportSessionStop: (cmafSessionId, detail) => {
+      nextSessionNumber: () => {
+        this.cmafSessionNumber += 1n;
+        this.stateChangeDelegate?.();
+        return this.cmafSessionNumber;
+      },
+      reportSessionStart: cmafSessionId => this.waitForDelivery(this.pushEvent({ type: CameraBufferEventType.CMAF_SESSION_START, cmafSessionId })),
+      reportSessionStop: cmafSessionId => {
         this.pushEvent({ type: CameraBufferEventType.CMAF_SESSION_STOP, cmafSessionId });
-        this.options.ingest?.delegate.handleUploadResult?.(cmafSessionId, undefined, detail);
+        this.options.ingest?.delegate.handleUploadResult?.(cmafSessionId);
       },
       reportError: (cmafSessionId, error, detail) => {
         this.pushEvent({ type: CameraBufferEventType.CMAF_ERROR, cmafSessionId, error });
@@ -852,8 +861,12 @@ export class SecureVideoController extends EventEmitter
       this.endWebRTCSession(sessionIdentifier).catch(error => debug("failed to end session %s: %s", sessionIdentifier, error));
     }
     this.recordingManagement?.handleFactoryReset();
+    for (const waiter of [...this.deliveryWaiters]) {
+      waiter.resolve(false);
+    }
     this.events = [];
     this.eventSequenceNumber = 0n;
+    this.cmafSessionNumber = 0n;
     this.zones = undefined;
     this.publishingPoint = undefined;
     this.privateKey = undefined;
@@ -883,6 +896,7 @@ export class SecureVideoController extends EventEmitter
       keys: [...this.keys.entries()].map(([keyNumber, key]) => ({ keyNumber: keyNumber.toString(), key: key.toString("base64") })),
       currentKeyNumber: this.currentKeyNumber?.toString(),
       eventSequenceNumber: this.eventSequenceNumber.toString(),
+      cmafSessionNumber: this.cmafSessionNumber.toString(),
     };
   }
 
@@ -912,6 +926,7 @@ export class SecureVideoController extends EventEmitter
     }
     this.currentKeyNumber = serialized.currentKeyNumber !== undefined ? BigInt(serialized.currentKeyNumber) : undefined;
     this.eventSequenceNumber = BigInt(serialized.eventSequenceNumber ?? "0");
+    this.cmafSessionNumber = BigInt(serialized.cmafSessionNumber ?? "0");
 
     this.bufferManagementService?.updateCharacteristic(Characteristic.BufferEventSequenceNumber, Number(this.eventSequenceNumber & 0xffffffffn));
     this.setClientCertificateNeedsUpdate(!this.clientCertificate);
@@ -1042,7 +1057,7 @@ export class SecureVideoController extends EventEmitter
     this.webrtcStreamManagementService?.updateCharacteristic(Characteristic.WebRTCNumberOfActiveSessions, Math.min(255, this.webrtcSessions.size));
   }
 
-  private pushEvent(event: CameraBufferEventInput): void {
+  private pushEvent(event: CameraBufferEventInput): bigint {
     this.eventSequenceNumber += 1n;
     const queued = { ...event, sequenceNumber: this.eventSequenceNumber } as CameraBufferEvent;
     this.events.push(queued);
@@ -1053,6 +1068,31 @@ export class SecureVideoController extends EventEmitter
     debug("queued buffer event %o", queued);
     this.bufferManagementService?.updateCharacteristic(Characteristic.BufferEventSequenceNumber, Number(this.eventSequenceNumber & 0xffffffffn));
     this.stateChangeDelegate?.();
+    return queued.sequenceNumber;
+  }
+
+  /** Resolves true once the HomeKit HomeHub fetched or acknowledged the event, false after the timeout. */
+  private waitForDelivery(sequenceNumber: bigint): Promise<boolean> {
+    return new Promise(resolve => {
+      const waiter: { sequenceNumber: bigint, timer?: NodeJS.Timeout, resolve: (delivered: boolean) => void } = {
+        sequenceNumber,
+        resolve: delivered => {
+          clearTimeout(waiter.timer);
+          this.deliveryWaiters.delete(waiter);
+          resolve(delivered);
+        },
+      };
+      waiter.timer = setTimeout(() => waiter.resolve(false), SESSION_START_DELIVERY_TIMEOUT);
+      this.deliveryWaiters.add(waiter);
+    });
+  }
+
+  private settleDeliveries(upTo: bigint): void {
+    for (const waiter of [...this.deliveryWaiters]) {
+      if (waiter.sequenceNumber <= upTo) {
+        waiter.resolve(true);
+      }
+    }
   }
 
   private handleBufferEventCommand(value: Buffer): Buffer {
@@ -1062,12 +1102,18 @@ export class SecureVideoController extends EventEmitter
     if (request.command === BufferEventCommandType.ACKNOWLEDGE) {
       const acknowledged = request.sequenceNumber ?? this.eventSequenceNumber;
       this.events = this.events.filter(event => event.sequenceNumber > acknowledged);
+      this.settleDeliveries(acknowledged);
       return encodeBufferEventCommandResponse([]);
     }
 
     const from = request.sequenceNumber ?? 0n;
     const limit = request.limit && request.limit > 0n ? Number(request.limit) : this.events.length;
-    return encodeBufferEventCommandResponse(this.events.filter(event => event.sequenceNumber >= from).slice(0, limit));
+    const events = this.events.filter(event => event.sequenceNumber >= from).slice(0, limit);
+    const last = events.at(-1);
+    if (last) {
+      this.settleDeliveries(last.sequenceNumber);
+    }
+    return encodeBufferEventCommandResponse(events);
   }
 
   private handleBufferUpload(value: Buffer): Buffer {

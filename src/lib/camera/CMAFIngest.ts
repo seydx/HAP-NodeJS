@@ -6,43 +6,32 @@ import { BufferUploadCommandType, CMAFError } from "./SecureVideoTypes";
 
 import type { CMAFTrack, CMAFTrackSegment } from "./CMAFTracks";
 import type { BufferUploadCommandRequest } from "./SecureVideoTypes";
-import type { CMAFRecordingDelegate, SecureVideoIngestCredentials } from "../controller/SecureVideoController";
+import type { CMAFRecordingDelegate, CMAFSegment, SecureVideoIngestCredentials } from "../controller/SecureVideoController";
 
 const debug = createDebug("HAP-NodeJS:SecureVideo:Ingest");
 
 const FIRST_SEGMENT_NUMBER = 1001;
 const DEFAULT_SEGMENT_DURATION_SECONDS = 2;
-// Matter 1.6.1 Push AV Stream Transport: a session lasts at most five minutes, a longer recording continues in the next
+// Matter 1.6.1 Push AV Stream Transport 11.7.1.6: a session lasts at most five minutes and at least two segments
 const MAX_SESSION_SECONDS = 300;
+// DASH-IF ingest 5.3: a failed transfer is sent again on a new connection
+const MAX_RETRIES = 2;
+const RETRY_DELAY_MS = 500;
 const PLAYLIST_CONTENT_TYPE = "application/vnd.apple.mpegurl";
 const INIT_CONTENT_TYPE = "video/mp4";
 const SEGMENT_CONTENT_TYPE = "video/iso.segment";
 
 /**
- * Media description the controller advertises in the HLS multivariant playlist.
- *
- * @group Camera Secure Video
- */
-export interface CMAFMediaDescription {
-  /** HLS codecs attribute of the video, e.g. `hvc1.1.6.L120.B0` */
-  codecs: string;
-  width: number;
-  height: number;
-  /** bits per second */
-  bitrate: number;
-}
-
-/**
- * Everything the ingest needs from the controller: the negotiated credentials, the advertised media description, the
- * persisted session number and the event reporters. Keeps the credential and event handling internal to the controller.
+ * Everything the ingest needs from the controller: the negotiated credentials, the persisted session number and the
+ * event reporters. Keeps the credential and event handling internal to the controller.
  *
  * @group Camera Secure Video
  */
 export interface CMAFIngestContext {
-  sensorUUID: string;
-  media: CMAFMediaDescription;
+  /** sent as User-Agent, DASH-IF ingest asks for brand name and version */
+  userAgent: string;
   credentials(): SecureVideoIngestCredentials;
-  /** the number of the next CMAF session: starts at 1 after pairing, persisted, never reused */
+  /** the number of the next CMAF session: starts at 1 for a new publishing point, persisted, never reused */
   nextSessionNumber(): bigint;
   reportSessionStart(cmafSessionId: bigint): void;
   reportSessionStop(cmafSessionId: bigint): void;
@@ -56,7 +45,7 @@ interface UploadSession {
   abort: AbortController;
   /** no further hub command is expected, the session is dropped once the upload ends */
   finalize: boolean;
-  /** the hub sent stop, the upload ends with the next fragment */
+  /** the hub sent stop, the upload ends with the fragments already received */
   stopRequested: boolean;
   finished: boolean;
 }
@@ -69,6 +58,16 @@ interface CMAFSession {
   seconds: number;
   /** uploaded segment durations per track id */
   durations: Map<number, number[]>;
+  /** tracks whose initial media playlist was accepted; only those get a final playlist */
+  opened: Set<number>;
+  failed: boolean;
+  ended: boolean;
+}
+
+interface PreparedSegment {
+  parts: CMAFTrackSegment[];
+  /** seconds, the longest track */
+  duration: number;
 }
 
 interface PutResult {
@@ -79,7 +78,27 @@ interface PutResult {
   headers: string;
 }
 
-function put(client: http2.ClientHttp2Session, path: string, body: Buffer, contentType: string, headers: http2.OutgoingHttpHeaders = {}): Promise<PutResult> {
+class IngestConnection {
+  private client?: http2.ClientHttp2Session;
+
+  constructor(private readonly origin: string, private readonly options: http2.SecureClientSessionOptions) {}
+
+  session(): http2.ClientHttp2Session {
+    if (!this.client || this.client.closed || this.client.destroyed) {
+      this.client = http2.connect(this.origin, this.options);
+      this.client.on("error", error => debug("http2 session error: %s", error.message));
+    }
+    return this.client;
+  }
+
+  /** closes the current connection once its streams are done, the next request opens a new one */
+  renew(): void {
+    this.client?.close();
+    this.client = undefined;
+  }
+}
+
+function put(client: http2.ClientHttp2Session, path: string, body: Buffer, contentType: string, headers: http2.OutgoingHttpHeaders): Promise<PutResult> {
   return new Promise((resolve, reject) => {
     const request = client.request({
       ":method": "PUT",
@@ -112,6 +131,29 @@ function put(client: http2.ClientHttp2Session, path: string, body: Buffer, conte
   });
 }
 
+// appends the parts of a segment to the one before it, a CMAF segment may hold several fragments
+function appendSegment(target: PreparedSegment, source: PreparedSegment): void {
+  for (const part of source.parts) {
+    const index = target.parts.findIndex(existing => existing.track === part.track);
+    if (index < 0) {
+      target.parts.push(part);
+      continue;
+    }
+    const existing = target.parts[index];
+    target.parts[index] = {
+      ...existing,
+      data: Buffer.concat([existing.data, part.data]),
+      duration: existing.duration + part.duration,
+      samples: existing.samples + part.samples,
+    };
+  }
+  target.duration = target.parts.reduce((longest, part) => Math.max(longest, part.duration), 0);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 /**
  * Formats a segment duration for the `#EXTINF` tag and the `X-EXTINF-duration` header.
  *
@@ -121,40 +163,55 @@ export function formatDuration(seconds: number): string {
   return seconds.toFixed(5);
 }
 
+function quote(value: string): string {
+  return `"${value}"`;
+}
+
 /**
- * Builds the HLS multivariant playlist of a CMAF session: one variant for the video track, audio tracks as renditions.
+ * Builds the HLS multivariant playlist of a CMAF session (RFC 8216): the video track as the variant, audio tracks as
+ * renditions. BANDWIDTH and FRAME-RATE come from the first segment, a representative period of the session.
  *
  * @group Camera Secure Video
  */
-export function buildMultivariantPlaylist(sensorUUID: string, media: CMAFMediaDescription, tracks: CMAFTrack[]): string {
+export function buildMultivariantPlaylist(tracks: CMAFTrack[], first: CMAFTrackSegment[]): string {
   const video = tracks.find(track => track.kind === "video");
   if (!video) {
     throw new Error("a CMAF session needs a video track");
   }
   const audio = tracks.filter(track => track.kind === "audio");
-  const codecs = [media.codecs, ...audio.slice(0, 1).map(track => track.codecs ?? "mp4a.40.2")].join(",");
+  const bandwidth = Math.ceil(first.reduce((sum, part) => sum + (part.duration > 0 ? part.data.length * 8 / part.duration : 0), 0));
+  const firstVideo = first.find(part => part.track === video);
+  const codecs = [video.codecs, ...audio.slice(0, 1).map(track => track.codecs)];
 
-  const lines = [
-    "#EXTM3U",
-    "#EXT-X-VERSION:7",
-    "#EXT-X-INDEPENDENT-SEGMENTS",
-    `#EXT-X-SESSION-DATA:DATA-ID="com.apple.homekit.sensor-id",VALUE="${sensorUUID}"`,
-  ];
+  const lines = ["#EXTM3U", "#EXT-X-VERSION:7", "#EXT-X-INDEPENDENT-SEGMENTS"];
   audio.forEach((track, index) => {
-    const defaultTrack = index === 0 ? "YES" : "NO";
-    lines.push(`#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="${track.name}",DEFAULT=${defaultTrack},AUTOSELECT=YES,URI="${track.name}/index.m3u8"`);
+    const attributes = [
+      "TYPE=AUDIO",
+      `GROUP-ID=${quote("audio")}`,
+      `NAME=${quote(track.name)}`,
+      `DEFAULT=${index === 0 ? "YES" : "NO"}`,
+      "AUTOSELECT=YES",
+      ...(track.channels ? [`CHANNELS=${quote(String(track.channels))}`] : []),
+      `URI=${quote(`${track.name}/index.m3u8`)}`,
+    ];
+    lines.push(`#EXT-X-MEDIA:${attributes.join(",")}`);
   });
-  lines.push(
-    `#EXT-X-STREAM-INF:BANDWIDTH=${media.bitrate},CODECS="${codecs}",RESOLUTION=${media.width}x${media.height}${audio.length ? ",AUDIO=\"audio\"" : ""}`,
-    `${video.name}/index.m3u8`,
-    "",
-  );
+
+  const variant = [
+    `BANDWIDTH=${bandwidth}`,
+    // CODECS lists every codec of the variant, it is left out when one of them is unknown
+    ...(codecs.every(Boolean) ? [`CODECS=${quote(codecs.join(","))}`] : []),
+    ...(video.width && video.height ? [`RESOLUTION=${video.width}x${video.height}`] : []),
+    ...(firstVideo && firstVideo.duration > 0 ? [`FRAME-RATE=${(firstVideo.samples / firstVideo.duration).toFixed(3)}`] : []),
+    ...(audio.length ? [`AUDIO=${quote("audio")}`] : []),
+  ];
+  lines.push(`#EXT-X-STREAM-INF:${variant.join(",")}`, `${video.name}/index.m3u8`, "");
   return lines.join("\n");
 }
 
 /**
  * Builds the HLS media playlist of a track. Without durations it is the initial playlist that opens the track, with
- * them the final one that lists every uploaded segment and closes it.
+ * them the final one that lists every uploaded segment and closes it (Matter 1.6.1 11.7.1.8.2).
  *
  * @group Camera Secure Video
  */
@@ -164,10 +221,9 @@ export function buildMediaPlaylist(track: CMAFTrack, targetDuration: number, dur
     "#EXTM3U",
     "#EXT-X-VERSION:7",
     `#EXT-X-TARGETDURATION:${target}`,
-    `#EXT-X-MEDIA-SEQUENCE:${FIRST_SEGMENT_NUMBER}`,
     "#EXT-X-PLAYLIST-TYPE:EVENT",
     "#EXT-X-INDEPENDENT-SEGMENTS",
-    `#EXT-X-MAP:URI="${track.name}.init"`,
+    `#EXT-X-MAP:URI=${quote(`${track.name}.init`)}`,
   ];
   if (durations) {
     durations.forEach((duration, index) => {
@@ -276,103 +332,170 @@ export class CMAFIngest {
     const { publishingPoint, privateKey, clientCertificate, ca } = this.context.credentials();
     if (!publishingPoint || !privateKey || !clientCertificate) {
       debug("upload ignored, ingest is not provisioned");
-      this.context.reportError(0n, CMAFError.INVALID_STATE);
+      this.context.reportError(session.clipId, CMAFError.INVALID_STATE);
       return;
     }
 
     const url = new URL(publishingPoint.url);
     const base = trailingSlash(url.pathname);
-    const client = http2.connect(url.origin, {
+    const connection = new IngestConnection(url.origin, {
       key: privateKey,
       cert: [toPem(clientCertificate), ...(ca ? [toPem(ca)] : [])].join(""),
       ca: publishingPoint.serverCACertificates.map(toPem),
     });
-    client.on("error", error => debug("http2 session error: %s", error.message));
 
     const clip = this.delegate.streamClip({ command: request, signal: session.abort.signal });
+    let tracks: CMAFTrack[] = [];
+    let targetDuration = 0;
     let current: CMAFSession | undefined;
     try {
       const first = await clip.next();
       if (first.done || first.value.type !== "init") {
         throw new Error("delegate did not yield an init segment first");
       }
-      const tracks = splitInitSegment(first.value.data);
+      tracks = splitInitSegment(first.value.data);
       if (!tracks.some(track => track.kind === "video")) {
         throw new Error("init segment without a video track");
       }
-      const media = first.value.media ?? this.context.media;
-      let targetDuration: number | undefined;
-      let reservedNumber: bigint | undefined = session.clipId;
 
-      for await (const segment of clip) {
-        if (segment.type !== "media") {
-          continue;
-        }
+      const prepare = (segment: CMAFSegment): PreparedSegment => {
         const fallback = segment.duration ?? DEFAULT_SEGMENT_DURATION_SECONDS;
         const parts = splitMediaSegment(segment.data, tracks).map(part => (part.duration > 0 ? part : { ...part, duration: fallback }));
-        const duration = parts.reduce((longest, part) => Math.max(longest, part.duration), 0);
-        // the target duration must not change once announced, the headroom absorbs keyframe jitter
-        targetDuration ??= Math.ceil(duration) + 1;
+        return { parts, duration: parts.reduce((longest, part) => Math.max(longest, part.duration), 0) };
+      };
 
-        if (current && (current.seconds + duration > MAX_SESSION_SECONDS || Date.now() - current.startedAt >= MAX_SESSION_SECONDS * 1000)) {
-          const ended = await this.endSession(client, current, tracks, targetDuration);
-          current = undefined;
-          if (!ended) {
-            return;
+      // two segments of lookahead: whether the segment after the current one is the last decides where a session ends
+      const window: PreparedSegment[] = [];
+      let ended = false;
+      const fill = async () => {
+        while (!ended && window.length < 3) {
+          if (session.stopRequested) {
+            ended = true;
+            break;
+          }
+          const next = await clip.next();
+          if (next.done) {
+            ended = true;
+          } else if (next.value.type === "media") {
+            const prepared = prepare(next.value);
+            const video = prepared.parts.find(part => part.track.kind === "video");
+            const previous = window.at(-1);
+            // every segment starts with a sync sample (CMAF, EXT-X-INDEPENDENT-SEGMENTS), a fragment that does not
+            // continues the segment before it
+            if (previous && video && !video.startsWithSync) {
+              appendSegment(previous, prepared);
+            } else {
+              window.push(prepared);
+            }
+            ended = !!next.value.last;
           }
         }
-        if (!current) {
-          current = await this.beginSession(client, base, tracks, media, targetDuration, reservedNumber ?? this.context.nextSessionNumber());
-          reservedNumber = undefined;
-          if (!current) {
-            return;
-          }
-        }
+      };
 
-        for (const part of parts) {
-          if (!(await this.putSegment(client, current, part))) {
-            return;
-          }
-        }
-        current.seconds += duration;
-        if (session.stopRequested || segment.last) {
+      let reserved: bigint | undefined = session.clipId;
+      for (;;) {
+        await fill();
+        const segment = window.shift();
+        if (!segment) {
           break;
         }
+
+        const lastFollower = ended && window.length === 1 ? window[0] : undefined;
+        if (current && this.endsBefore(current, segment, lastFollower)) {
+          await this.endSession(connection, current, tracks, targetDuration);
+          if (!current.ended) {
+            return;
+          }
+          current = undefined;
+        }
+        if (!current) {
+          // the target duration must not change once announced, the headroom absorbs keyframe jitter
+          targetDuration ||= Math.ceil(segment.duration) + 1;
+          current = await this.beginSession(connection, base, tracks, segment.parts, targetDuration, reserved ?? this.context.nextSessionNumber());
+          reserved = undefined;
+          if (current.failed) {
+            return;
+          }
+        }
+
+        const active = current;
+        await Promise.all(segment.parts.map(part => this.putSegment(connection, active, part)));
+        if (active.failed) {
+          return;
+        }
+        active.seconds += segment.duration;
       }
 
       if (current) {
-        const ended = await this.endSession(client, current, tracks, targetDuration!);
-        current = undefined;
-        if (!ended) {
-          return;
-        }
+        await this.endSession(connection, current, tracks, targetDuration);
       }
       debug("upload of clip %s finished", session.clipId);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       debug("upload of clip %s failed: %s", session.clipId, message);
-      this.context.reportError(current?.number ?? 0n, CMAFError.CONNECTION_FAILED, message);
+      if (!current?.failed) {
+        this.context.reportError(current?.number ?? session.clipId, CMAFError.CONNECTION_FAILED, message);
+      }
+      if (current) {
+        current.failed = true;
+      }
     } finally {
+      // a session the server saw begin is closed even after a failure, so it is not left half open on the server side
+      if (current && !current.ended) {
+        await this.closeTracks(connection, current, tracks, targetDuration).catch(() => undefined);
+      }
       await clip.return?.(undefined).catch(() => undefined);
-      client.close();
+      connection.renew();
     }
   }
 
-  private async beginSession(client: http2.ClientHttp2Session, base: string, tracks: CMAFTrack[], media: CMAFMediaDescription,
-    targetDuration: number, number: bigint): Promise<CMAFSession | undefined> {
+  // a session ends after five minutes; a last segment that would not fit takes the current one along, so no session
+  // is left with a single segment
+  private endsBefore(session: CMAFSession, segment: PreparedSegment, lastFollower?: PreparedSegment): boolean {
+    if (Date.now() - session.startedAt >= MAX_SESSION_SECONDS * 1000 || session.seconds + segment.duration > MAX_SESSION_SECONDS) {
+      return true;
+    }
+    return !!lastFollower && session.seconds + segment.duration + lastFollower.duration > MAX_SESSION_SECONDS;
+  }
+
+  private async beginSession(connection: IngestConnection, base: string, tracks: CMAFTrack[], first: CMAFTrackSegment[], targetDuration: number,
+    number: bigint): Promise<CMAFSession> {
     const session: CMAFSession = {
       number,
       prefix: `${base}session_${number}/`,
       startedAt: Date.now(),
       seconds: 0,
       durations: new Map(tracks.map(track => [track.id, []])),
+      opened: new Set(),
+      failed: false,
+      ended: false,
     };
     this.context.reportSessionStart(number);
     debug("session %s starting with tracks %s", number, tracks.map(track => track.name).join(", "));
 
-    const multivariant = Buffer.from(buildMultivariantPlaylist(this.context.sensorUUID, media, tracks));
-    if (!(await this.putChecked(client, session, `${session.prefix}index.m3u8`, multivariant, PLAYLIST_CONTENT_TYPE))) {
-      return undefined;
+    const multivariant = Buffer.from(buildMultivariantPlaylist(tracks, first));
+    if (!(await this.putChecked(connection, session, `${session.prefix}index.m3u8`, multivariant, PLAYLIST_CONTENT_TYPE))) {
+      return session;
+    }
+    // Matter 1.6.1 11.7.1.8.2: tracks start after the multivariant playlist, each with its initial playlist and its
+    // CMAF header, and are uploaded in parallel
+    await Promise.all(tracks.map(async track => {
+      const playlist = Buffer.from(buildMediaPlaylist(track, targetDuration));
+      if (!(await this.putChecked(connection, session, `${session.prefix}${track.name}/index.m3u8`, playlist, PLAYLIST_CONTENT_TYPE))) {
+        return;
+      }
+      session.opened.add(track.id);
+      await this.putChecked(connection, session, `${session.prefix}${track.name}/${track.name}.init`, track.init, INIT_CONTENT_TYPE);
+    }));
+    return session;
+  }
+
+  private async putSegment(connection: IngestConnection, session: CMAFSession, part: CMAFTrackSegment): Promise<void> {
+    const durations = session.durations.get(part.track.id)!;
+    const path = `${session.prefix}${part.track.name}/segment_${FIRST_SEGMENT_NUMBER + durations.length}.m4s`;
+    const headers = { "x-extinf-duration": formatDuration(part.duration) };
+    if (await this.putChecked(connection, session, path, part.data, SEGMENT_CONTENT_TYPE, headers)) {
+      durations.push(part.duration);
     }
     for (const track of tracks) {
       const playlist = Buffer.from(buildMediaPlaylist(track, targetDuration));
@@ -388,37 +511,56 @@ export class CMAFIngest {
     return session;
   }
 
-  private async putSegment(client: http2.ClientHttp2Session, session: CMAFSession, part: CMAFTrackSegment): Promise<boolean> {
-    const durations = session.durations.get(part.track.id)!;
-    const path = `${session.prefix}${part.track.name}/segment_${FIRST_SEGMENT_NUMBER + durations.length}.m4s`;
-    const uploaded = await this.putChecked(client, session, path, part.data, SEGMENT_CONTENT_TYPE, { "x-extinf-duration": formatDuration(part.duration) });
-    if (uploaded) {
-      durations.push(part.duration);
+  private async endSession(connection: IngestConnection, session: CMAFSession, tracks: CMAFTrack[], targetDuration: number): Promise<void> {
+    await this.closeTracks(connection, session, tracks, targetDuration);
+    if (!session.failed) {
+      session.ended = true;
+      this.context.reportSessionStop(session.number);
+      debug("session %s finished after %ds", session.number, Math.round(session.seconds));
     }
-    return uploaded;
   }
 
-  private async endSession(client: http2.ClientHttp2Session, session: CMAFSession, tracks: CMAFTrack[], targetDuration: number): Promise<boolean> {
-    for (const track of tracks) {
+  private async closeTracks(connection: IngestConnection, session: CMAFSession, tracks: CMAFTrack[], targetDuration: number): Promise<void> {
+    await Promise.all(tracks.filter(track => session.opened.has(track.id)).map(async track => {
       const playlist = Buffer.from(buildMediaPlaylist(track, targetDuration, session.durations.get(track.id)));
-      if (!(await this.putChecked(client, session, `${session.prefix}${track.name}/index.m3u8`, playlist, PLAYLIST_CONTENT_TYPE))) {
-        return false;
+      if (await this.putChecked(connection, session, `${session.prefix}${track.name}/index.m3u8`, playlist, PLAYLIST_CONTENT_TYPE)) {
+        session.opened.delete(track.id);
       }
-    }
-    this.context.reportSessionStop(session.number);
-    debug("session %s finished after %ds", session.number, Math.round(session.seconds));
-    return true;
+    }));
   }
 
-  private async putChecked(client: http2.ClientHttp2Session, session: CMAFSession, path: string, body: Buffer, contentType: string,
-    headers?: http2.OutgoingHttpHeaders): Promise<boolean> {
-    const result = await put(client, path, body, contentType, headers);
+  private async putChecked(connection: IngestConnection, session: CMAFSession, path: string, body: Buffer, contentType: string,
+    headers: http2.OutgoingHttpHeaders = {}): Promise<boolean> {
+    const result = await this.transfer(connection, path, body, contentType, headers);
     if (result.status >= 200 && result.status < 300) {
       return true;
     }
-    const response = [result.body, result.headers].filter(Boolean).join(" ");
-    const detail = `PUT ${path.slice(path.indexOf("session_"))} (${body.length} bytes) -> ${result.status} ${response}`;
-    this.context.reportError(session.number, mapStatus(result.status), detail);
+    if (!session.failed) {
+      session.failed = true;
+      const response = [result.body, result.headers].filter(Boolean).join(" ");
+      const detail = `PUT ${path.slice(path.indexOf("session_"))} (${body.length} bytes) -> ${result.status} ${response}`;
+      this.context.reportError(session.number, mapStatus(result.status), detail);
+    }
     return false;
+  }
+
+  // a 4xx refuses the request itself, sending it unchanged again cannot succeed; transport errors and 5xx are retried
+  private async transfer(connection: IngestConnection, path: string, body: Buffer, contentType: string,
+    headers: http2.OutgoingHttpHeaders): Promise<PutResult> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const result = await put(connection.session(), path, body, contentType, { "user-agent": this.context.userAgent, ...headers });
+        if (result.status < 500 || attempt >= MAX_RETRIES) {
+          return result;
+        }
+      } catch (error) {
+        if (attempt >= MAX_RETRIES) {
+          throw error;
+        }
+        debug("PUT %s failed, retrying: %s", path.slice(path.indexOf("session_")), error instanceof Error ? error.message : error);
+      }
+      connection.renew();
+      await sleep(RETRY_DELAY_MS);
+    }
   }
 }

@@ -9,6 +9,8 @@ export interface TestRun {
   trackId: number;
   durations: number[];
   samples: Buffer[];
+  /** the first sample is marked as a non-sync sample through the trun first sample flags */
+  nonSyncStart?: boolean;
 }
 
 export interface TestSegmentOptions {
@@ -46,7 +48,18 @@ function trak(track: TestTrack): Buffer {
     0x05, 0x02, 0x12, 0x10,
     0x06, 0x01, 0x02,
   ]));
-  const entry = track.handler === "soun" ? box("mp4a", Buffer.alloc(28), esds) : box("hvc1", Buffer.alloc(78));
+  // channel count 1 at offset 16 of the audio sample entry; 1920x1080 at offset 24 of the visual sample entry
+  const audioEntry = Buffer.alloc(28);
+  audioEntry.writeUInt16BE(1, 16);
+  const visualEntry = Buffer.alloc(78);
+  visualEntry.writeUInt16BE(1920, 24);
+  visualEntry.writeUInt16BE(1080, 26);
+  // Main profile, compatibility flags 1 and 2, constraint byte 0xB0, level 93
+  const hvcC = box("hvcC", Buffer.from([
+    0x01, 0x01, 0x60, 0x00, 0x00, 0x00, 0xb0, 0x00, 0x00, 0x00, 0x00, 0x00, 93,
+    0xf0, 0x00, 0xfc, 0xfd, 0xf8, 0xf8, 0x00, 0x00, 0x0f, 0x00,
+  ]));
+  const entry = track.handler === "soun" ? box("mp4a", audioEntry, esds) : box("hvc1", visualEntry, hvcC);
 
   return box("trak",
     fullBox("tkhd", 0, 3, tkhd),
@@ -78,7 +91,8 @@ export function mediaSegment(sequence: number, runs: TestRun[], options: TestSeg
   const trafs = (offsets: number[]) => runs.map((run, index) => box("traf",
     fullBox("tfhd", 0, defaultBaseIsMoof ? 0x20000 : 0, u32(run.trackId)),
     fullBox("tfdt", 1, 0, Buffer.alloc(8)),
-    fullBox("trun", 0, 0x301, u32(run.samples.length), u32(offsets[index]),
+    fullBox("trun", 0, run.nonSyncStart ? 0x305 : 0x301, u32(run.samples.length), u32(offsets[index]),
+      ...(run.nonSyncStart ? [u32(0x10000)] : []),
       ...run.samples.flatMap((sample, sampleIndex) => [u32(run.durations[sampleIndex]), u32(sample.length)])),
   ));
 

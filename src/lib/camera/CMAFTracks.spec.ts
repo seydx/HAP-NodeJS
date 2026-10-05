@@ -38,13 +38,14 @@ describe("CMAFTracks", () => {
   test("splits the init segment into one init per track", () => {
     const tracks = splitInitSegment(initSegment([VIDEO, AUDIO]));
 
-    expect(tracks.map(({ id, kind, name, timescale, codecs, defaultSampleDuration }) => ({ id, kind, name, timescale, codecs, defaultSampleDuration })))
-      .toEqual([
-        { id: 1, kind: "video", name: "video", timescale: 90000, codecs: undefined, defaultSampleDuration: 0 },
-        { id: 2, kind: "audio", name: "audio", timescale: 32000, codecs: "mp4a.40.2", defaultSampleDuration: 1024 },
-      ]);
+    expect(tracks).toMatchObject([
+      { id: 1, kind: "video", name: "video", timescale: 90000, codecs: "hvc1.1.6.L93.B0", width: 1920, height: 1080, defaultSampleDuration: 0 },
+      { id: 2, kind: "audio", name: "audio", timescale: 32000, codecs: "mp4a.40.2", channels: 1, defaultSampleDuration: 1024 },
+    ]);
     for (const track of tracks) {
       expect(topLevel(track.init).map(entry => entry.type)).toEqual(["ftyp", "moov"]);
+      // CMAF headers carry the CMAF track brand
+      expect(track.init.toString("latin1", 16, track.init.readUInt32BE(0))).toBe("iso6cmfc");
       expect(count(track.init, "trak")).toBe(1);
       expect(count(track.init, "trex")).toBe(1);
       expect(count(track.init, "mvhd")).toBe(1);
@@ -58,7 +59,7 @@ describe("CMAFTracks", () => {
     expect(tracks.map(track => track.name)).toEqual(["video", "video2", "audio"]);
   });
 
-  test("splits a muxed fragment and keeps every sample byte", () => {
+  test("splits a muxed fragment, keeps every sample byte and leaves out prft", () => {
     const tracks = splitInitSegment(initSegment([VIDEO, AUDIO]));
     const videoSamples = [Buffer.alloc(300, 0xaa), Buffer.alloc(120, 0xab)];
     const audioSamples = [Buffer.alloc(50, 0xba), Buffer.alloc(60, 0xbb), Buffer.alloc(70, 0xbc)];
@@ -71,11 +72,13 @@ describe("CMAFTracks", () => {
 
     expect(video.track.name).toBe("video");
     expect(video.duration).toBe(4);
-    expect(topLevel(video.data).map(entry => entry.type)).toEqual(["prft", "moof", "mdat"]);
+    expect(video.samples).toBe(2);
+    expect(topLevel(video.data).map(entry => entry.type)).toEqual(["moof", "mdat"]);
     expect(payload(video.data)).toEqual(Buffer.concat(videoSamples));
 
     expect(audio.track.name).toBe("audio");
     expect(audio.duration).toBeCloseTo(3072 / 32000);
+    expect(audio.samples).toBe(3);
     expect(topLevel(audio.data).map(entry => entry.type)).toEqual(["moof", "mdat"]);
     expect(payload(audio.data)).toEqual(Buffer.concat(audioSamples));
     expect(count(audio.data, "traf")).toBe(1);
@@ -93,6 +96,17 @@ describe("CMAFTracks", () => {
     const [video, audio] = splitMediaSegment(segment, tracks);
     expect(payload(video.data)).toEqual(videoSamples[0]);
     expect(payload(audio.data)).toEqual(audioSamples[0]);
+  });
+
+  test("tells whether a fragment starts with a sync sample", () => {
+    const tracks = splitInitSegment(initSegment([VIDEO, AUDIO]));
+    const sample = Buffer.alloc(10);
+    const synced = splitMediaSegment(mediaSegment(1, [{ trackId: 1, durations: [90000], samples: [sample] }]), tracks);
+    const unsynced = splitMediaSegment(mediaSegment(2, [{ trackId: 1, durations: [90000], samples: [sample], nonSyncStart: true }]), tracks);
+    expect(synced[0].startsWithSync).toBe(true);
+    expect(unsynced[0].startsWithSync).toBe(false);
+    // the data offset still points at the samples after the extra first sample flags field
+    expect(payload(unsynced[0].data)).toEqual(sample);
   });
 
   test("leaves out tracks without samples in the fragment", () => {

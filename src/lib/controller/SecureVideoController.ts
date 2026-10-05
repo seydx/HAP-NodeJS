@@ -93,7 +93,6 @@ import { ControllerIdentifier, ControllerServiceMap, SerializableController, Sna
 
 import type { CharacteristicValue } from "../../types";
 import type { CharacteristicChange } from "../Characteristic";
-import type { CMAFMediaDescription } from "../camera/CMAFIngest";
 import type { SecureVideoSnapshotHandler } from "../camera/HDSSnapshotTransport";
 import type { CameraRecordingOptions, RecordingManagementState } from "../camera/RecordingManagement";
 import type { HAPConnection } from "../util/eventedhttp";
@@ -256,8 +255,6 @@ export interface CMAFSegment {
   type: "init" | "media";
   /** muxed fMP4 (ftyp + moov, or [prft] moof mdat); the controller splits it into one CMAF track per media type */
   data: Buffer;
-  /** on the init segment: the actual media description for the HLS playlists, overriding the controller default */
-  media?: CMAFMediaDescription;
   /** media fragment duration in seconds, used when the fragment carries no sample durations, defaults to 2 */
   duration?: number;
   /** set on the last media fragment */
@@ -312,6 +309,8 @@ export interface SecureVideoControllerOptions {
     delegate: CMAFRecordingDelegate;
     /** common name placed into the client certificate signing request */
     certificateCommonName?: string;
+    /** User-Agent of the uploads, brand name and version of the accessory software; defaults to `HAP-NodeJS` */
+    userAgent?: string;
   };
   /** reuse an existing motion sensor instead of creating one */
   motionService?: Service;
@@ -535,18 +534,6 @@ export class SecureVideoController extends EventEmitter
     };
   }
 
-  private ingestMediaDescription(): CMAFMediaDescription {
-    const tiers = this.options.video.tiers;
-    const top = tiers.reduce((best, tier) => (tier.width * tier.height > best.width * best.height ? tier : best), tiers[0]);
-    const codecs = this.options.video.codec === StreamTierVideoCodec.H265 ? "hvc1.1.6.L120.B0" : "avc1.640028";
-    return {
-      codecs,
-      width: top?.width ?? 1920,
-      height: top?.height ?? 1080,
-      bitrate: (top?.targetAverageBitrate ?? 1700) * 1000,
-    };
-  }
-
   /** Signals whether the CMAF ingest client certificate needs to be (re)issued by the HomeKit HomeHub. */
   public setClientCertificateNeedsUpdate(needsUpdate: boolean): void {
     this.clientCertificateManagementService?.updateCharacteristic(Characteristic.CameraClientCertificateStatus,
@@ -710,8 +697,7 @@ export class SecureVideoController extends EventEmitter
 
   private configureCMAFIngestServices(): void {
     this.cmafIngest = new CMAFIngest(this.options.ingest!.delegate, {
-      sensorUUID: this.options.sensor.uuid,
-      media: this.ingestMediaDescription(),
+      userAgent: this.options.ingest!.userAgent ?? "HAP-NodeJS",
       credentials: () => this.ingestCredentials(),
       nextSessionNumber: () => {
         this.cmafSessionNumber += 1n;
@@ -742,7 +728,12 @@ export class SecureVideoController extends EventEmitter
     this.registerRead(buffer.getCharacteristic(Characteristic.CameraRecordingPublishingPoint),
       () => this.publishingPoint ? encodeCameraRecordingPublishingPoint(this.publishingPoint).toString("base64") : "");
     this.handleTLVWrite(buffer.getCharacteristic(Characteristic.CameraRecordingPublishingPoint), value => {
-      this.publishingPoint = value.length ? decodeCameraRecordingPublishingPoint(value) : undefined;
+      const publishingPoint = value.length ? decodeCameraRecordingPublishingPoint(value) : undefined;
+      // a new publishing point is a new transport in Matter 1.6.1 terms (11.7.1.6), its session numbers start at 1
+      if (publishingPoint?.url !== this.publishingPoint?.url) {
+        this.cmafSessionNumber = 0n;
+      }
+      this.publishingPoint = publishingPoint;
       this.options.ingest?.delegate.updatePublishingPoint?.(this.publishingPoint);
       this.stateChangeDelegate?.();
       return undefined;

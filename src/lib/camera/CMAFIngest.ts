@@ -497,18 +497,6 @@ export class CMAFIngest {
     if (await this.putChecked(connection, session, path, part.data, SEGMENT_CONTENT_TYPE, headers)) {
       durations.push(part.duration);
     }
-    for (const track of tracks) {
-      const playlist = Buffer.from(buildMediaPlaylist(track, targetDuration));
-      if (!(await this.putChecked(client, session, `${session.prefix}${track.name}/index.m3u8`, playlist, PLAYLIST_CONTENT_TYPE))) {
-        return undefined;
-      }
-    }
-    for (const track of tracks) {
-      if (!(await this.putChecked(client, session, `${session.prefix}${track.name}/${track.name}.init`, track.init, INIT_CONTENT_TYPE))) {
-        return undefined;
-      }
-    }
-    return session;
   }
 
   private async endSession(connection: IngestConnection, session: CMAFSession, tracks: CMAFTrack[], targetDuration: number): Promise<void> {

@@ -70,6 +70,46 @@ describe(HAPStorage, () => {
     });
   });
 
+  describe("setCustomStorage", () => {
+    const backend = () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const items = new Map<string, any>();
+      return {
+        items,
+        getItem: (key: string) => items.get(key),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        setItemSync: (key: string, value: any) => void items.set(key, value),
+        removeItemSync: (key: string) => void items.delete(key),
+      };
+    };
+
+    it("should use the given storage instead of the file storage", () => {
+      const storage = new HAPStorage();
+      const custom = backend();
+      storage.setCustomStorage(custom);
+
+      const previousCwd = process.cwd();
+      try {
+        process.chdir(storagePath);
+        expect(storage.storage()).toBe(custom);
+        storage.storage().setItemSync("key.json", { foo: 1 });
+      } finally {
+        process.chdir(previousCwd);
+      }
+
+      expect(custom.items.get("key.json")).toEqual({ foo: 1 });
+      expect(fs.existsSync(path.join(storagePath, "persist"))).toBe(false);
+    });
+
+    it("should reject setCustomStorage after storage has already been initialized", () => {
+      const storage = new HAPStorage();
+      storage.setCustomStoragePath(storagePath);
+
+      storage.storage();
+      expect(() => storage.setCustomStorage(backend())).toThrow(Error);
+    });
+  });
+
   describe("persist directory permissions (#1028)", () => {
     let warnSpy: jest.SpyInstance;
     let unwritableDir: string;

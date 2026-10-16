@@ -225,6 +225,8 @@ export interface CMAFRecordingDelegate {
   streamClip(request: CMAFClipRequest): AsyncGenerator<CMAFSegment>;
   /** the HomeKit HomeHub signals recording activity windows */
   handleBufferActivity?(request: BufferActivityCommandRequest): void;
+  /** the HomeKit HomeHub stopped an upload, `request.stop` is where it wants the clip to end */
+  handleUploadStop?(request: BufferUploadCommandRequest): void;
   updateRecordingActive?(active: boolean, audioActive: boolean): void;
   /** called with undefined when the controller clears the publishing point */
   updatePublishingPoint?(publishingPoint: CameraRecordingPublishingPointValue | undefined): void;

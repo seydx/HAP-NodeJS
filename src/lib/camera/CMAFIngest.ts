@@ -335,6 +335,7 @@ export class CMAFIngest {
     const existing = this.sessions.get(request.sessionId);
 
     if (request.command === BufferUploadCommandType.STOP) {
+      this.delegate.handleUploadStop?.(request);
       if (existing) {
         existing.finalize = true;
         existing.stopRequested = true;

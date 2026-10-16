@@ -4,7 +4,7 @@ import http2 from "http2";
 import { initSegment, mediaSegment } from "../../test-utils/fmp4";
 import { buildMediaPlaylist, buildMultivariantPlaylist, CMAFIngest, formatDuration, formatUserAgent, mapStatus } from "./CMAFIngest";
 import { splitInitSegment, splitMediaSegment } from "./CMAFTracks";
-import { BufferUploadCommandType, CMAFError } from "./SecureVideoTypes";
+import { BufferUploadCommandType, BufferUploadStopAction, CMAFError } from "./SecureVideoTypes";
 
 import type { CMAFIngestContext } from "./CMAFIngest";
 import type { CMAFTrackSegment } from "./CMAFTracks";
@@ -281,6 +281,16 @@ describe("CMAFIngest", () => {
     // the server saw the session begin, so its tracks are closed even though the upload failed
     expect(requests.slice(-2).map(request => request.path)).toEqual(["session_1/high/index.m3u8", "session_1/audio1/index.m3u8"]);
     expect(requests.at(-1)!.body).toContain("#EXT-X-ENDLIST");
+  });
+
+  test("passes the stop command to the delegate", () => {
+    const handleUploadStop = jest.fn();
+    const delegate = { streamClip: jest.fn(), handleUploadStop } as unknown as CMAFRecordingDelegate;
+    const ingest = new CMAFIngest(delegate, {} as CMAFIngestContext);
+    const stop = { sessionId: 7n, command: BufferUploadCommandType.STOP, stop: 123n, stopAction: BufferUploadStopAction.FINALIZE };
+
+    expect(ingest.handleUploadCommand(stop)).toBe(0n);
+    expect(handleUploadStop).toHaveBeenCalledWith(stop);
   });
 
   test("maps http statuses to cmaf errors", () => {

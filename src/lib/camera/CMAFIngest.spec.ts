@@ -2,11 +2,12 @@ import { EventEmitter } from "events";
 import http2 from "http2";
 
 import { initSegment, mediaSegment } from "../../test-utils/fmp4";
-import { buildMediaPlaylist, buildMultivariantPlaylist, CMAFIngest, formatDuration, mapStatus } from "./CMAFIngest";
+import { buildMediaPlaylist, buildMultivariantPlaylist, CMAFIngest, formatDuration, formatUserAgent, mapStatus } from "./CMAFIngest";
 import { splitInitSegment, splitMediaSegment } from "./CMAFTracks";
 import { BufferUploadCommandType, CMAFError } from "./SecureVideoTypes";
 
 import type { CMAFIngestContext } from "./CMAFIngest";
+import type { CMAFTrackSegment } from "./CMAFTracks";
 import type { CMAFRecordingDelegate, CMAFSegment, SecureVideoIngestCredentials } from "../controller/SecureVideoController";
 
 const VIDEO = { id: 1, handler: "vide" as const, timescale: 90000 };
@@ -80,7 +81,7 @@ function setup(segments: CMAFSegment[], status: (path: string, attempt: number) 
     },
   };
   const context: CMAFIngestContext = {
-    userAgent: "test-agent/1.0",
+    userAgent: () => "test-agent/1.0",
     credentials: () => ({
       publishingPoint: { url: `https://ingest.example.com${BASE}`, serverCACertificates: [] },
       privateKey: "key",
@@ -102,25 +103,49 @@ function setup(segments: CMAFSegment[], status: (path: string, attempt: number) 
 }
 
 const videoSegments = (requests: Request[], session: number) =>
-  requests.filter(request => request.path.startsWith(`session_${session}/video/segment_`)).length;
+  requests.filter(request => request.path.startsWith(`session_${session}/high/segment_`)).length;
 
 afterEach(() => {
   jest.restoreAllMocks();
 });
 
 describe("CMAFIngest", () => {
-  test("builds the multivariant playlist from the tracks and the first segment", () => {
+  test("builds the multivariant playlist in the form of the iCloud ingest sample", () => {
     const tracks = splitInitSegment(initSegment([VIDEO, AUDIO]));
-    const first = splitMediaSegment(fragment(4), tracks);
-    const lines = buildMultivariantPlaylist(tracks, first).split("\n");
-    const bandwidth = Math.ceil(first.reduce((sum, part) => sum + part.data.length * 8 / part.duration, 0));
+    const segments = [splitMediaSegment(fragment(4), tracks), splitMediaSegment(fragment(2), tracks)];
+    const rate = (part: CMAFTrackSegment) => part.data.length * 8 / part.duration;
+    const average = (parts: CMAFTrackSegment[]) =>
+      parts.reduce((sum, part) => sum + part.data.length, 0) * 8 / parts.reduce((sum, part) => sum + part.duration, 0);
+    const [video, audio] = [0, 1].map(index => segments.map(parts => parts[index]));
+    const peak = Math.ceil(Math.max(...video.map(rate)) + Math.max(...audio.map(rate)));
+    const mean = Math.ceil(average(video) + average(audio));
 
-    expect(lines[0]).toBe("#EXTM3U");
-    expect(lines).toContain("#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"audio\",NAME=\"audio\",DEFAULT=YES,AUTOSELECT=YES,CHANNELS=\"1\",URI=\"audio/index.m3u8\"");
-    const variant = `#EXT-X-STREAM-INF:BANDWIDTH=${bandwidth},CODECS="hvc1.1.6.L93.B0,mp4a.40.2",RESOLUTION=1920x1080,FRAME-RATE=0.500,AUDIO="audio"`;
-    expect(lines[lines.indexOf(variant) + 1]).toBe("video/index.m3u8");
-    expect(lines.filter(line => line.startsWith("#EXT-X-MEDIA") || line.startsWith("#EXT-X-STREAM-INF"))).toHaveLength(2);
-    expect(lines.some(line => line.includes("SESSION") || line.includes("KEY"))).toBe(false);
+    expect(buildMultivariantPlaylist(tracks, segments).split("\n")).toEqual([
+      "#EXTM3U",
+      "#EXT-X-VERSION:11",
+      "#EXT-X-INDEPENDENT-SEGMENTS",
+      "",
+      "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"Camera Audio\",DEFAULT=YES,CHANNELS=\"1\",URI=\"audio1/index.m3u8\"",
+      "",
+      `#EXT-X-STREAM-INF:BANDWIDTH=${peak},AVERAGE-BANDWIDTH=${mean},RESOLUTION=1920x1080,CODECS="hvc1.1.6.L93.B0,mp4a.40.2",AUDIO="aud"`,
+      "high/index.m3u8",
+      "",
+    ]);
+  });
+
+  test("lists one variant per video track, highest first", () => {
+    const tracks = splitInitSegment(initSegment([{ ...VIDEO, id: 3, width: 640, height: 360 }, VIDEO]));
+    const lines = buildMultivariantPlaylist(tracks, []).split("\n");
+
+    expect(lines.filter(line => !line.startsWith("#") && line)).toEqual(["high/index.m3u8", "mid/index.m3u8"]);
+    expect(lines.some(line => line.startsWith("#EXT-X-MEDIA") || line.includes("AUDIO="))).toBe(false);
+  });
+
+  test("formats the user agent of the iCloud ingest", () => {
+    expect(formatUserAgent({ software: "camera.ui-homekit", vendor: "Acme", model: "Cam (2); 4K", firmwareVersion: "v1:2" }))
+      .toBe("HKSV/3.0 camera.ui-homekit (Acme; Cam 2 4K; v1 2)");
+    expect(formatUserAgent({ software: "Home Helper 1.0", vendor: "", model: "G234", firmwareVersion: "4.56.21" }))
+      .toBe("HKSV/3.0 Home-Helper-1.0 (unknown; G234; 4.56.21)");
   });
 
   test("builds the initial and the final media playlist", () => {
@@ -128,11 +153,11 @@ describe("CMAFIngest", () => {
 
     expect(buildMediaPlaylist(video, 5).split("\n")).toEqual([
       "#EXTM3U",
-      "#EXT-X-VERSION:7",
+      "#EXT-X-VERSION:11",
       "#EXT-X-TARGETDURATION:5",
       "#EXT-X-PLAYLIST-TYPE:EVENT",
       "#EXT-X-INDEPENDENT-SEGMENTS",
-      "#EXT-X-MAP:URI=\"video.init\"",
+      "#EXT-X-MAP:URI=\"high.init\"",
       "",
     ]);
 
@@ -163,16 +188,16 @@ describe("CMAFIngest", () => {
 
     expect(requests.map(({ path, contentType, extinf }) => `${path} ${contentType}${extinf ? ` ${extinf}` : ""}`)).toEqual([
       "session_1/index.m3u8 application/vnd.apple.mpegurl",
-      "session_1/video/index.m3u8 application/vnd.apple.mpegurl",
-      "session_1/audio/index.m3u8 application/vnd.apple.mpegurl",
-      "session_1/video/video.init video/mp4",
-      "session_1/audio/audio.init video/mp4",
-      "session_1/video/segment_1001.m4s video/iso.segment 4.00000",
-      "session_1/audio/segment_1001.m4s video/iso.segment 0.03200",
-      "session_1/video/segment_1002.m4s video/iso.segment 4.00000",
-      "session_1/audio/segment_1002.m4s video/iso.segment 0.03200",
-      "session_1/video/index.m3u8 application/vnd.apple.mpegurl",
-      "session_1/audio/index.m3u8 application/vnd.apple.mpegurl",
+      "session_1/high/index.m3u8 application/vnd.apple.mpegurl",
+      "session_1/audio1/index.m3u8 application/vnd.apple.mpegurl",
+      "session_1/high/high.init video/mp4",
+      "session_1/audio1/audio1.init video/mp4",
+      "session_1/high/segment_1001.m4s video/iso.segment 4.00000",
+      "session_1/audio1/segment_1001.m4s video/iso.segment 0.03200",
+      "session_1/high/segment_1002.m4s video/iso.segment 4.00000",
+      "session_1/audio1/segment_1002.m4s video/iso.segment 0.03200",
+      "session_1/high/index.m3u8 application/vnd.apple.mpegurl",
+      "session_1/audio1/index.m3u8 application/vnd.apple.mpegurl",
     ]);
     expect(requests.every(request => request.userAgent === "test-agent/1.0")).toBe(true);
     expect(requests[1].body).not.toContain("#EXT-X-ENDLIST");
@@ -196,7 +221,7 @@ describe("CMAFIngest", () => {
     expect(videoSegments(requests, 1)).toBe(3);
     expect(videoSegments(requests, 2)).toBe(2);
     const paths = requests.map(request => request.path);
-    expect(paths.indexOf("session_2/index.m3u8")).toBeGreaterThan(paths.lastIndexOf("session_1/audio/index.m3u8"));
+    expect(paths.indexOf("session_2/index.m3u8")).toBeGreaterThan(paths.lastIndexOf("session_1/audio1/index.m3u8"));
     expect(events).toEqual(["start 1", "stop 1", "start 2", "stop 2"]);
   });
 
@@ -224,7 +249,7 @@ describe("CMAFIngest", () => {
     ]);
     await done;
 
-    const video = requests.filter(request => request.path.startsWith("session_1/video/segment_"));
+    const video = requests.filter(request => request.path.startsWith("session_1/high/segment_"));
     expect(video.map(request => `${request.path.split("/").pop()} ${request.extinf}`)).toEqual(["segment_1001.m4s 2.50000", "segment_1002.m4s 2.00000"]);
     expect(video[0].body.split("moof").length - 1).toBe(2);
   });
@@ -250,11 +275,11 @@ describe("CMAFIngest", () => {
     await done;
 
     expect(events).toEqual(["start 1", `error 1 ${CMAFError.HTTP_BAD_REQUEST}`]);
-    expect(errors[0]).toMatch(/^PUT session_1\/(video|audio)\/segment_1001\.m4s \(\d+ bytes\) -> 400 x-apple-request-uuid=4f1c$/);
+    expect(errors[0]).toMatch(/^PUT session_1\/(high|audio1)\/segment_1001\.m4s \(\d+ bytes\) -> 400 x-apple-request-uuid=4f1c$/);
     // a 4xx is not sent again
-    expect(requests.filter(request => request.path === "session_1/video/segment_1001.m4s")).toHaveLength(1);
+    expect(requests.filter(request => request.path === "session_1/high/segment_1001.m4s")).toHaveLength(1);
     // the server saw the session begin, so its tracks are closed even though the upload failed
-    expect(requests.slice(-2).map(request => request.path)).toEqual(["session_1/video/index.m3u8", "session_1/audio/index.m3u8"]);
+    expect(requests.slice(-2).map(request => request.path)).toEqual(["session_1/high/index.m3u8", "session_1/audio1/index.m3u8"]);
     expect(requests.at(-1)!.body).toContain("#EXT-X-ENDLIST");
   });
 

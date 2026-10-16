@@ -6,7 +6,7 @@ import { BufferUploadCommandType, CMAFError } from "./SecureVideoTypes";
 
 import type { CMAFTrack, CMAFTrackSegment } from "./CMAFTracks";
 import type { BufferUploadCommandRequest } from "./SecureVideoTypes";
-import type { CMAFRecordingDelegate, CMAFSegment, SecureVideoIngestCredentials } from "../controller/SecureVideoController";
+import type { CMAFRecordingDelegate, CMAFSegment, SecureVideoIngestCredentials, SecureVideoUserAgent } from "../controller/SecureVideoController";
 
 const debug = createDebug("HAP-NodeJS:SecureVideo:Ingest");
 
@@ -20,6 +20,11 @@ const RETRY_DELAY_MS = 500;
 const PLAYLIST_CONTENT_TYPE = "application/vnd.apple.mpegurl";
 const INIT_CONTENT_TYPE = "video/mp4";
 const SEGMENT_CONTENT_TYPE = "video/iso.segment";
+// the playlist form of the iCloud ingest sample
+const HLS_VERSION = 11;
+const AUDIO_GROUP = "aud";
+const AUDIO_NAME = "Camera Audio";
+const USER_AGENT_PRODUCT = "HKSV/3.0";
 
 /**
  * Everything the ingest needs from the controller: the negotiated credentials, the persisted session number and the
@@ -28,8 +33,8 @@ const SEGMENT_CONTENT_TYPE = "video/iso.segment";
  * @group Camera Secure Video
  */
 export interface CMAFIngestContext {
-  /** sent as User-Agent, DASH-IF ingest asks for brand name and version */
-  userAgent: string;
+  /** the User-Agent of the next upload, see {@link formatUserAgent} */
+  userAgent(): string;
   credentials(): SecureVideoIngestCredentials;
   /** the number of the next CMAF session: starts at 1 for a new publishing point, persisted, never reused */
   nextSessionNumber(): bigint;
@@ -78,10 +83,15 @@ interface PutResult {
   headers: string;
 }
 
+interface Bitrate {
+  peak: number;
+  average: number;
+}
+
 class IngestConnection {
   private client?: http2.ClientHttp2Session;
 
-  constructor(private readonly origin: string, private readonly options: http2.SecureClientSessionOptions) {}
+  constructor(private readonly origin: string, private readonly options: http2.SecureClientSessionOptions, readonly userAgent: string) {}
 
   session(): http2.ClientHttp2Session {
     if (!this.client || this.client.closed || this.client.destroyed) {
@@ -167,45 +177,84 @@ function quote(value: string): string {
   return `"${value}"`;
 }
 
+// RFC 8216bis 4.4.6.2: BANDWIDTH is the peak segment bit rate, AVERAGE-BANDWIDTH the average one
+function bitrate(track: CMAFTrack, segments: CMAFTrackSegment[][]): Bitrate {
+  let peak = 0;
+  let bytes = 0;
+  let seconds = 0;
+  for (const part of segments.flat()) {
+    if (part.track !== track || part.duration <= 0) {
+      continue;
+    }
+    peak = Math.max(peak, part.data.length * 8 / part.duration);
+    bytes += part.data.length;
+    seconds += part.duration;
+  }
+  return { peak, average: seconds > 0 ? bytes * 8 / seconds : 0 };
+}
+
+// the vendor sub-fields may hold spaces, dashes and underscores, but no colons, semicolons or parentheses
+function userAgentField(value: string): string {
+  return value.replace(/[^\x20-\x7e]|[:;()]/g, " ").replace(/\s+/g, " ").trim() || "unknown";
+}
+
 /**
- * Builds the HLS multivariant playlist of a CMAF session (RFC 8216): the video track as the variant, audio tracks as
- * renditions. BANDWIDTH and FRAME-RATE come from the first segment, a representative period of the session.
+ * Formats the User-Agent the iCloud ingest requires on every request:
+ * `HKSV/3.0 <software> (<vendor>; <model>; <firmware version>)`.
  *
  * @group Camera Secure Video
  */
-export function buildMultivariantPlaylist(tracks: CMAFTrack[], first: CMAFTrackSegment[]): string {
-  const video = tracks.find(track => track.kind === "video");
-  if (!video) {
+export function formatUserAgent(agent: SecureVideoUserAgent): string {
+  const software = agent.software.replace(/[^\w.-]+/g, "-") || "unknown";
+  return `${USER_AGENT_PRODUCT} ${software} (${[agent.vendor, agent.model, agent.firmwareVersion].map(userAgentField).join("; ")})`;
+}
+
+/**
+ * Builds the HLS multivariant playlist of a CMAF session in the form of the iCloud ingest sample: one variant per video
+ * track, highest first, and the audio tracks as renditions of one group. The bit rates come from the segments at hand
+ * when the session starts and include the audio of the variant.
+ *
+ * @group Camera Secure Video
+ */
+export function buildMultivariantPlaylist(tracks: CMAFTrack[], segments: CMAFTrackSegment[][]): string {
+  const video = tracks.filter(track => track.kind === "video");
+  if (!video.length) {
     throw new Error("a CMAF session needs a video track");
   }
   const audio = tracks.filter(track => track.kind === "audio");
-  const bandwidth = Math.ceil(first.reduce((sum, part) => sum + (part.duration > 0 ? part.data.length * 8 / part.duration : 0), 0));
-  const firstVideo = first.find(part => part.track === video);
-  const codecs = [video.codecs, ...audio.slice(0, 1).map(track => track.codecs)];
+  const audioBitrates = audio.map(track => bitrate(track, segments));
+  const audioPeak = Math.max(0, ...audioBitrates.map(entry => entry.peak));
+  const audioAverage = Math.max(0, ...audioBitrates.map(entry => entry.average));
 
-  const lines = ["#EXTM3U", "#EXT-X-VERSION:7", "#EXT-X-INDEPENDENT-SEGMENTS"];
-  audio.forEach((track, index) => {
+  const lines = ["#EXTM3U", `#EXT-X-VERSION:${HLS_VERSION}`, "#EXT-X-INDEPENDENT-SEGMENTS", ""];
+  if (audio.length) {
+    audio.forEach((track, index) => {
+      const attributes = [
+        "TYPE=AUDIO",
+        `GROUP-ID=${quote(AUDIO_GROUP)}`,
+        `NAME=${quote(index === 0 ? AUDIO_NAME : `${AUDIO_NAME} ${index + 1}`)}`,
+        `DEFAULT=${index === 0 ? "YES" : "NO"}`,
+        ...(track.channels ? [`CHANNELS=${quote(String(track.channels))}`] : []),
+        `URI=${quote(`${track.name}/index.m3u8`)}`,
+      ];
+      lines.push(`#EXT-X-MEDIA:${attributes.join(",")}`);
+    });
+    lines.push("");
+  }
+
+  for (const track of video) {
+    const { peak, average } = bitrate(track, segments);
+    const codecs = [track.codecs, ...audio.slice(0, 1).map(entry => entry.codecs)];
     const attributes = [
-      "TYPE=AUDIO",
-      `GROUP-ID=${quote("audio")}`,
-      `NAME=${quote(track.name)}`,
-      `DEFAULT=${index === 0 ? "YES" : "NO"}`,
-      "AUTOSELECT=YES",
-      ...(track.channels ? [`CHANNELS=${quote(String(track.channels))}`] : []),
-      `URI=${quote(`${track.name}/index.m3u8`)}`,
+      `BANDWIDTH=${Math.ceil(peak + audioPeak)}`,
+      `AVERAGE-BANDWIDTH=${Math.ceil(average + audioAverage)}`,
+      ...(track.width && track.height ? [`RESOLUTION=${track.width}x${track.height}`] : []),
+      // CODECS lists every codec of the variant, it is left out when one of them is unknown
+      ...(codecs.every(Boolean) ? [`CODECS=${quote(codecs.join(","))}`] : []),
+      ...(audio.length ? [`AUDIO=${quote(AUDIO_GROUP)}`] : []),
     ];
-    lines.push(`#EXT-X-MEDIA:${attributes.join(",")}`);
-  });
-
-  const variant = [
-    `BANDWIDTH=${bandwidth}`,
-    // CODECS lists every codec of the variant, it is left out when one of them is unknown
-    ...(codecs.every(Boolean) ? [`CODECS=${quote(codecs.join(","))}`] : []),
-    ...(video.width && video.height ? [`RESOLUTION=${video.width}x${video.height}`] : []),
-    ...(firstVideo && firstVideo.duration > 0 ? [`FRAME-RATE=${(firstVideo.samples / firstVideo.duration).toFixed(3)}`] : []),
-    ...(audio.length ? [`AUDIO=${quote("audio")}`] : []),
-  ];
-  lines.push(`#EXT-X-STREAM-INF:${variant.join(",")}`, `${video.name}/index.m3u8`, "");
+    lines.push(`#EXT-X-STREAM-INF:${attributes.join(",")}`, `${track.name}/index.m3u8`, "");
+  }
   return lines.join("\n");
 }
 
@@ -219,7 +268,7 @@ export function buildMediaPlaylist(track: CMAFTrack, targetDuration: number, dur
   const target = Math.max(targetDuration, ...(durations ?? []).map(Math.round));
   const lines = [
     "#EXTM3U",
-    "#EXT-X-VERSION:7",
+    `#EXT-X-VERSION:${HLS_VERSION}`,
     `#EXT-X-TARGETDURATION:${target}`,
     "#EXT-X-PLAYLIST-TYPE:EVENT",
     "#EXT-X-INDEPENDENT-SEGMENTS",
@@ -342,7 +391,7 @@ export class CMAFIngest {
       key: privateKey,
       cert: [toPem(clientCertificate), ...(ca ? [toPem(ca)] : [])].join(""),
       ca: publishingPoint.serverCACertificates.map(toPem),
-    });
+    }, this.context.userAgent());
 
     const clip = this.delegate.streamClip({ command: request, signal: session.abort.signal });
     let tracks: CMAFTrack[] = [];
@@ -411,7 +460,8 @@ export class CMAFIngest {
         if (!current) {
           // the target duration must not change once announced, the headroom absorbs keyframe jitter
           targetDuration ||= Math.ceil(segment.duration) + 1;
-          current = await this.beginSession(connection, base, tracks, segment.parts, targetDuration, reserved ?? this.context.nextSessionNumber());
+          const known = [segment, ...window].map(entry => entry.parts);
+          current = await this.beginSession(connection, base, tracks, known, targetDuration, reserved ?? this.context.nextSessionNumber());
           reserved = undefined;
           if (current.failed) {
             return;
@@ -458,7 +508,7 @@ export class CMAFIngest {
     return !!lastFollower && session.seconds + segment.duration + lastFollower.duration > MAX_SESSION_SECONDS;
   }
 
-  private async beginSession(connection: IngestConnection, base: string, tracks: CMAFTrack[], first: CMAFTrackSegment[], targetDuration: number,
+  private async beginSession(connection: IngestConnection, base: string, tracks: CMAFTrack[], known: CMAFTrackSegment[][], targetDuration: number,
     number: bigint): Promise<CMAFSession> {
     const session: CMAFSession = {
       number,
@@ -473,7 +523,7 @@ export class CMAFIngest {
     this.context.reportSessionStart(number);
     debug("session %s starting with tracks %s", number, tracks.map(track => track.name).join(", "));
 
-    const multivariant = Buffer.from(buildMultivariantPlaylist(tracks, first));
+    const multivariant = Buffer.from(buildMultivariantPlaylist(tracks, known));
     if (!(await this.putChecked(connection, session, `${session.prefix}index.m3u8`, multivariant, PLAYLIST_CONTENT_TYPE))) {
       return session;
     }
@@ -537,7 +587,7 @@ export class CMAFIngest {
     headers: http2.OutgoingHttpHeaders): Promise<PutResult> {
     for (let attempt = 0; ; attempt++) {
       try {
-        const result = await put(connection.session(), path, body, contentType, { "user-agent": this.context.userAgent, ...headers });
+        const result = await put(connection.session(), path, body, contentType, { "user-agent": connection.userAgent, ...headers });
         if (result.status < 500 || attempt >= MAX_RETRIES) {
           return result;
         }

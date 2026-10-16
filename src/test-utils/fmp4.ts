@@ -3,6 +3,11 @@ export interface TestTrack {
   handler: "vide" | "soun";
   timescale: number;
   defaultSampleDuration?: number;
+  /** video only, defaults to 1920x1080 */
+  width?: number;
+  height?: number;
+  /** audio only, defaults to aac */
+  codec?: "aac" | "opus";
 }
 
 export interface TestRun {
@@ -11,16 +16,31 @@ export interface TestRun {
   samples: Buffer[];
   /** the first sample is marked as a non-sync sample through the trun first sample flags */
   nonSyncStart?: boolean;
+  /** baseMediaDecodeTime of the tfdt, defaults to 0 */
+  decodeTime?: bigint;
+}
+
+export interface TestProducerReference {
+  trackId: number;
+  ntp: bigint;
+  mediaTime: bigint;
+  flags?: number;
 }
 
 export interface TestSegmentOptions {
-  prftTrackId?: number;
+  prft?: TestProducerReference;
   defaultBaseIsMoof?: boolean;
 }
 
 function u32(value: number): Buffer {
   const buffer = Buffer.alloc(4);
   buffer.writeUInt32BE(value >>> 0);
+  return buffer;
+}
+
+function u64(value: bigint): Buffer {
+  const buffer = Buffer.alloc(8);
+  buffer.writeBigUInt64BE(value);
   return buffer;
 }
 
@@ -48,18 +68,21 @@ function trak(track: TestTrack): Buffer {
     0x05, 0x02, 0x12, 0x10,
     0x06, 0x01, 0x02,
   ]));
-  // channel count 1 at offset 16 of the audio sample entry; 1920x1080 at offset 24 of the visual sample entry
+  // channel count at offset 16 of the audio sample entry, width and height at offset 24 of the visual sample entry
   const audioEntry = Buffer.alloc(28);
   audioEntry.writeUInt16BE(1, 16);
   const visualEntry = Buffer.alloc(78);
-  visualEntry.writeUInt16BE(1920, 24);
-  visualEntry.writeUInt16BE(1080, 26);
+  visualEntry.writeUInt16BE(track.width ?? 1920, 24);
+  visualEntry.writeUInt16BE(track.height ?? 1080, 26);
   // Main profile, compatibility flags 1 and 2, constraint byte 0xB0, level 93
   const hvcC = box("hvcC", Buffer.from([
     0x01, 0x01, 0x60, 0x00, 0x00, 0x00, 0xb0, 0x00, 0x00, 0x00, 0x00, 0x00, 93,
     0xf0, 0x00, 0xfc, 0xfd, 0xf8, 0xf8, 0x00, 0x00, 0x0f, 0x00,
   ]));
-  const entry = track.handler === "soun" ? box("mp4a", audioEntry, esds) : box("hvc1", visualEntry, hvcC);
+  // mono, pre-skip 312, 48 kHz input, mapping family 0
+  const dOps = box("dOps", Buffer.from([0x00, 0x01, 0x01, 0x38, 0x00, 0x00, 0xbb, 0x80, 0x00, 0x00, 0x00]));
+  const audioSampleEntry = track.codec === "opus" ? box("Opus", audioEntry, dOps) : box("mp4a", audioEntry, esds);
+  const entry = track.handler === "soun" ? audioSampleEntry : box("hvc1", visualEntry, hvcC);
 
   return box("trak",
     fullBox("tkhd", 0, 3, tkhd),
@@ -82,15 +105,18 @@ export function initSegment(tracks: TestTrack[]): Buffer {
   ]);
 }
 
-export function prft(trackId: number): Buffer {
-  return fullBox("prft", 1, 0, u32(trackId), Buffer.alloc(16, 0x11));
+export function prft(reference: TestProducerReference): Buffer {
+  const times = Buffer.alloc(16);
+  times.writeBigUInt64BE(reference.ntp, 0);
+  times.writeBigUInt64BE(reference.mediaTime, 8);
+  return fullBox("prft", 1, reference.flags ?? 0, u32(reference.trackId), times);
 }
 
 export function mediaSegment(sequence: number, runs: TestRun[], options: TestSegmentOptions = {}): Buffer {
   const defaultBaseIsMoof = options.defaultBaseIsMoof ?? true;
   const trafs = (offsets: number[]) => runs.map((run, index) => box("traf",
     fullBox("tfhd", 0, defaultBaseIsMoof ? 0x20000 : 0, u32(run.trackId)),
-    fullBox("tfdt", 1, 0, Buffer.alloc(8)),
+    fullBox("tfdt", 1, 0, u64(run.decodeTime ?? 0n)),
     fullBox("trun", 0, run.nonSyncStart ? 0x305 : 0x301, u32(run.samples.length), u32(offsets[index]),
       ...(run.nonSyncStart ? [u32(0x10000)] : []),
       ...run.samples.flatMap((sample, sampleIndex) => [u32(run.durations[sampleIndex]), u32(sample.length)])),
@@ -107,7 +133,7 @@ export function mediaSegment(sequence: number, runs: TestRun[], options: TestSeg
   });
 
   return Buffer.concat([
-    ...(options.prftTrackId !== undefined ? [prft(options.prftTrackId)] : []),
+    ...(options.prft ? [prft(options.prft)] : []),
     box("moof", mfhd, ...trafs(offsets)),
     box("mdat", ...runs.flatMap(run => run.samples)),
   ]);

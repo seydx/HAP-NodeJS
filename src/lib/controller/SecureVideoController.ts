@@ -62,7 +62,7 @@ import {
   WebRTCStreamingStatus,
   WebRTCUpdateSessionRequest,
 } from "../camera/SecureVideoTypes";
-import { CMAFIngest } from "../camera/CMAFIngest";
+import { CMAFIngest, formatUserAgent } from "../camera/CMAFIngest";
 import { createClientCSR, generateClientKey } from "../camera/SecureVideoCredentials";
 import { HDSSnapshotTransport } from "../camera/HDSSnapshotTransport";
 import { EventTriggerOption, RecordingManagement } from "../camera/RecordingManagement";
@@ -250,12 +250,31 @@ export interface CMAFClipRequest {
  */
 export interface CMAFSegment {
   type: "init" | "media";
-  /** muxed fMP4 (ftyp + moov, or [prft] moof mdat); the controller splits it into one CMAF track per media type */
+  /**
+   * muxed fMP4 (ftyp + moov, or prft moof mdat); the controller splits it into one CMAF track per media type. HKSV
+   * requires a prft with the wall clock time of the fragment start in every media segment, the controller writes it
+   * again for each track.
+   */
   data: Buffer;
   /** media fragment duration in seconds, used when the fragment carries no sample durations, defaults to 2 */
   duration?: number;
   /** set on the last media fragment */
   last?: boolean;
+}
+
+/**
+ * The parts of the User-Agent the iCloud ingest requires, sent as `HKSV/3.0 <software> (<vendor>; <model>; <firmwareVersion>)`.
+ *
+ * @group Camera Secure Video
+ */
+export interface SecureVideoUserAgent {
+  /** name and version of the accessory software, letters, digits, dots, dashes and underscores, like `HomeHelper-1.0` */
+  software: string;
+  /** friendly name of the camera vendor */
+  vendor: string;
+  model: string;
+  /** must match the Firmware Revision of the accessory information */
+  firmwareVersion: string;
 }
 
 /**
@@ -306,8 +325,8 @@ export interface SecureVideoControllerOptions {
     delegate: CMAFRecordingDelegate;
     /** common name placed into the client certificate signing request */
     certificateCommonName?: string;
-    /** User-Agent of the uploads, brand name and version of the accessory software; defaults to `HAP-NodeJS` */
-    userAgent?: string;
+    /** identifies the accessory in every upload request; read for each upload, so it follows the accessory information */
+    userAgent: () => SecureVideoUserAgent;
   };
   /** reuse an existing motion sensor instead of creating one */
   motionService?: Service;
@@ -694,7 +713,7 @@ export class SecureVideoController extends EventEmitter
 
   private configureCMAFIngestServices(): void {
     this.cmafIngest = new CMAFIngest(this.options.ingest!.delegate, {
-      userAgent: this.options.ingest!.userAgent ?? "HAP-NodeJS",
+      userAgent: () => formatUserAgent(this.options.ingest!.userAgent()),
       credentials: () => this.ingestCredentials(),
       nextSessionNumber: () => {
         this.cmafSessionNumber += 1n;

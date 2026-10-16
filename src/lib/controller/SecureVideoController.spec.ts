@@ -116,6 +116,7 @@ describe("SecureVideoController", () => {
             return;
           },
         },
+        userAgent: () => ({ software: "test-1.0", vendor: "Vendor", model: "Model", firmwareVersion: "1.0.0" }),
       },
     };
 

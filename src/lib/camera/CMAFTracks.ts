@@ -7,7 +7,10 @@
 export interface CMAFTrack {
   id: number;
   kind: "video" | "audio";
-  /** track name in the upload paths, `video` or `audio`, numbered from the second track of a kind on */
+  /**
+   * track name in the upload paths, the names the iCloud ingest expects: `high`, `mid` and `low` for the video tracks
+   * by resolution, `audio1` and up for the audio tracks
+   */
   name: string;
   timescale: number;
   /** RFC 6381 codecs value from the sample entry; known for HEVC, AVC and AAC */
@@ -49,6 +52,17 @@ interface Run {
   start: number;
   length: number;
 }
+
+interface ProducerReference {
+  flags: number;
+  trackId: number;
+  /** NTP timestamp, 32.32 fixed point */
+  ntp: bigint;
+  /** decode time in the timescale of the reference track */
+  mediaTime: bigint;
+}
+
+const VIDEO_TRACK_NAMES = ["high", "mid", "low"];
 
 const TFHD_BASE_DATA_OFFSET = 0x1;
 const TFHD_SAMPLE_DESCRIPTION_INDEX = 0x2;
@@ -218,7 +232,10 @@ function describeEntry(buffer: Buffer, kind: "video" | "audio", entry: Box | und
         height: buffer.readUInt16BE(entry.contentStart + 26),
       };
     }
-    return { codecs: aacCodecs(buffer, entry), channels: buffer.readUInt16BE(entry.contentStart + 16) };
+    return {
+      codecs: entry.type === "Opus" ? "Opus" : aacCodecs(buffer, entry),
+      channels: buffer.readUInt16BE(entry.contentStart + 16),
+    };
   } catch {
     return {};
   }
@@ -257,7 +274,6 @@ export function splitInitSegment(init: Buffer): CMAFTrack[] {
   const shared = moovChildren.filter(box => box.type !== "trak" && box.type !== "mvex");
 
   const tracks: CMAFTrack[] = [];
-  const counts = { video: 0, audio: 0 };
   for (const trak of moovChildren.filter(box => box.type === "trak")) {
     const mdia = child(init, trak, "mdia");
     const hdlr = mdia && child(init, mdia, "hdlr");
@@ -280,11 +296,10 @@ export function splitInitSegment(init: Buffer): CMAFTrack[] {
       ...(mvex ? [makeBox("mvex", ...mvexOthers, ...(trex ? [slice(init, trex)] : []))] : []),
     );
 
-    counts[kind]++;
     tracks.push({
       id,
       kind,
-      name: counts[kind] === 1 ? kind : `${kind}${counts[kind]}`,
+      name: kind,
       timescale: init.readUInt32BE(mdhd.contentStart + (fullBoxVersion(init, mdhd) === 1 ? 20 : 12)),
       ...describeEntry(init, kind, sampleEntry(init, mdia)),
       init: Buffer.concat([cmafFileType(init, ftyp), moovOut]),
@@ -292,7 +307,20 @@ export function splitInitSegment(init: Buffer): CMAFTrack[] {
       defaultSampleFlags: trex ? init.readUInt32BE(trex.contentStart + 20) : 0,
     });
   }
-  return tracks;
+
+  const video = tracks.filter(track => track.kind === "video")
+    .sort((a, b) => (b.width ?? 0) * (b.height ?? 0) - (a.width ?? 0) * (a.height ?? 0));
+  if (video.length > VIDEO_TRACK_NAMES.length) {
+    throw new Error(`at most ${VIDEO_TRACK_NAMES.length} video tracks are supported, the init segment has ${video.length}`);
+  }
+  video.forEach((track, index) => {
+    track.name = VIDEO_TRACK_NAMES[index];
+  });
+  const audio = tracks.filter(track => track.kind === "audio");
+  audio.forEach((track, index) => {
+    track.name = `audio${index + 1}`;
+  });
+  return [...video, ...audio];
 }
 
 interface RebuiltTraf {
@@ -301,6 +329,8 @@ interface RebuiltTraf {
   ticks: number;
   samples: number;
   startsWithSync: boolean;
+  /** baseMediaDecodeTime of the tfdt */
+  decodeTime?: bigint;
   /** writes the trun data offsets once the start of the new sample data relative to the moof is known */
   patch(dataStart: number): void;
 }
@@ -318,6 +348,10 @@ function rebuildTraf(segment: Buffer, base: number, traf: Box, track: CMAFTrack)
   const defaultSize = tfhdFlags & TFHD_DEFAULT_SAMPLE_SIZE ? segment.readUInt32BE(field) : 0;
   field += tfhdFlags & TFHD_DEFAULT_SAMPLE_SIZE ? 4 : 0;
   const defaultFlags = tfhdFlags & TFHD_DEFAULT_SAMPLE_FLAGS ? segment.readUInt32BE(field) : track.defaultSampleFlags;
+  const tfdt = children.find(box => box.type === "tfdt");
+  const decodeTime = tfdt && (fullBoxVersion(segment, tfdt) === 1
+    ? segment.readBigUInt64BE(tfdt.contentStart + 4)
+    : BigInt(segment.readUInt32BE(tfdt.contentStart + 4)));
   let firstFlags: number | undefined;
 
   const out = Buffer.from(segment.subarray(traf.start, traf.end));
@@ -369,12 +403,38 @@ function rebuildTraf(segment: Buffer, base: number, traf: Box, track: CMAFTrack)
     });
   };
   const startsWithSync = firstFlags === undefined || !(firstFlags & SAMPLE_IS_NON_SYNC);
-  return { traf: out, runs, ticks, samples, startsWithSync, patch };
+  return { traf: out, runs, ticks, samples, startsWithSync, decodeTime, patch };
+}
+
+function producerReference(buffer: Buffer, prft: Box): ProducerReference {
+  const c = prft.contentStart;
+  return {
+    flags: buffer.readUInt32BE(c) & 0xffffff,
+    trackId: buffer.readUInt32BE(c + 4),
+    ntp: buffer.readBigUInt64BE(c + 8),
+    mediaTime: fullBoxVersion(buffer, prft) === 1 ? buffer.readBigUInt64BE(c + 16) : BigInt(buffer.readUInt32BE(c + 16)),
+  };
+}
+
+// the wall clock of the track's first sample: the reference time shifted by the distance between the two decode times
+function trackProducerReference(reference: ProducerReference, referenceTimescale: number | undefined, track: CMAFTrack,
+  decodeTime: bigint): Buffer {
+  const shift = referenceTimescale
+    ? (decodeTime << 32n) / BigInt(track.timescale) - (reference.mediaTime << 32n) / BigInt(referenceTimescale)
+    : 0n;
+  const shifted = reference.ntp + shift;
+  const content = Buffer.alloc(24);
+  content.writeUInt32BE((1 << 24) | reference.flags, 0);
+  content.writeUInt32BE(track.id, 4);
+  content.writeBigUInt64BE(shifted >= 0n && shifted < 1n << 64n ? shifted : reference.ntp, 8);
+  content.writeBigUInt64BE(decodeTime, 16);
+  return makeBox("prft", content);
 }
 
 /**
- * Splits a muxed fMP4 media segment (moof mdat, possibly repeated) into one CMAF segment per track. Sample data is
- * copied unchanged; boxes other than moof and mdat, like prft, are left out.
+ * Splits a muxed fMP4 media segment ([prft] moof mdat, possibly repeated) into one CMAF segment per track. Sample data
+ * is copied unchanged. A prft in front of a moof is written again for every track, since HKSV and DASH-IF ingest want
+ * one in every segment; other boxes are left out.
  *
  * @group Camera Secure Video
  */
@@ -384,10 +444,19 @@ export function splitMediaSegment(segment: Buffer, tracks: CMAFTrack[]): CMAFTra
   const samples = new Map<number, number>(tracks.map(track => [track.id, 0]));
   const startsWithSync = new Map<number, boolean>();
 
+  let reference: ProducerReference | undefined;
   for (const box of boxes(segment)) {
+    if (box.type === "prft") {
+      reference = producerReference(segment, box);
+      continue;
+    }
     if (box.type !== "moof") {
       continue;
     }
+    const moofReference = reference;
+    // a prft describes the moof right after it
+    reference = undefined;
+    const referenceTimescale = moofReference && tracks.find(track => track.id === moofReference.trackId)?.timescale;
 
     const mfhd = child(segment, box, "mfhd");
     const mfhdSize = mfhd ? mfhd.end - mfhd.start : 0;
@@ -410,8 +479,11 @@ export function splitMediaSegment(segment: Buffer, tracks: CMAFTrack[]): CMAFTra
       rebuilt.patch(8 + mfhdSize + rebuilt.traf.length + 8);
       const moof = makeBox("moof", ...(mfhd ? [slice(segment, mfhd)] : []), rebuilt.traf);
       const mdat = makeBox("mdat", ...rebuilt.runs.map(run => segment.subarray(run.start, run.start + run.length)));
+      const prft = moofReference && rebuilt.decodeTime !== undefined
+        ? [trackProducerReference(moofReference, referenceTimescale, track, rebuilt.decodeTime)]
+        : [];
 
-      parts.get(track.id)!.push(moof, mdat);
+      parts.get(track.id)!.push(...prft, moof, mdat);
       ticks.set(track.id, ticks.get(track.id)! + rebuilt.ticks);
       samples.set(track.id, samples.get(track.id)! + rebuilt.samples);
       if (!startsWithSync.has(track.id)) {

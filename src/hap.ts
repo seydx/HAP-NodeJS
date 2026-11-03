@@ -48,11 +48,7 @@ const debug = createDebug('HAP-NodeJS:Advertiser')
  * @group Utils
  */
 export function HAPLibraryVersion(): string {
-  // bundled as CommonJS, import.meta.url is empty there
-  const packageJson = import.meta.url
-    ? JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf-8'))
-    // eslint-disable-next-line ts/no-require-imports
-    : require('../package.json')
+  const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf-8'))
   const { version } = packageJson
   return version
 }

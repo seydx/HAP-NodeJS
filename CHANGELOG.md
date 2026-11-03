@@ -2,6 +2,79 @@
 
 All notable changes to `@homebridge/hap-nodejs` will be documented in this file. This project tries to adhere to [Semantic Versioning](http://semver.org/).
 
+## v2.3.0 (2026-11-01)
+
+### ⚠️ Upgrade notes
+
+- **For developers** importing single files from `dist/lib` instead of the package itself: `dist/lib/Service.js` and `dist/lib/Characteristic.js` no longer attach the definitions (like `Service.Lightbulb` or `Characteristic.On`) when they are loaded on their own. Import from `@homebridge/hap-nodejs` as normal and nothing changes.
+- **Node.js 22 users** need `v22.12.0` or newer. Node.js 24 and 26 are unchanged. This is the first Node.js 22 release that can `require()` an ES module, and the upstream `dbus-native` package needs it too.
+- **HAP-NodeJS is now an ES module.** Importing it works as before, including `import hap from '@homebridge/hap-nodejs'`. CommonJS code can still `require('@homebridge/hap-nodejs')`, on the Node.js versions above.
+
+### Changes
+
+- fix: ignore state changes reported while a controller is being restored (#1133) (@seydx)
+- perf: use the native crypto of Node.js for Curve25519 and Ed25519 (#1135) (@StefanRiese)
+- chore: update hap characteristics and services
+- chore(deps): dependency updates
+- chore(deps): switch from the @homebridge/dbus-native fork back to upstream dbus-native
+- fix: warn only once per address when a connection's local interface can't be found (#1131)
+- fix(datastream): stop a stray unidentified frame from crashing the process
+- fix(datastream): drop malformed frame payloads instead of crashing the process
+- fix(datastream): destroy closed sockets when the remote never closes its side
+- fix(camera): reject malformed SetupEndpoints writes before marking the stream busy
+- fix(camera): answer SetupEndpoints with an error when the prepared stream response is invalid
+- fix(camera): keep RTP proxy sockets open and only log errors after they are bound
+- fix(datastream): decode binary data of up to 32 bytes instead of dropping it
+- fix(datastream): make back-references follow the OPACK rule so reader and writer agree
+- perf(datastream): stop allocating an unused buffer for every received frame
+- fix(datastream): answer requests that have no handler instead of leaving them unanswered
+- fix(remote): read target configurations from the Map they are stored in
+- fix(remote): remove a whole target when the request lists no buttons
+- fix(remote): don't crash when a delayed button release fails
+- fix(remote): stop the Siri audio producer when the stream is refused
+- fix(adaptive-lighting): forget the saved curve position when a new curve arrives
+- fix(adaptive-lighting): keep Adaptive Lighting on when a control point request is rejected
+- fix(color-utils): stop rounding the shared color temperature lookup table in place
+- fix(adaptive-lighting): guard the curve maths against zero-length segments and NaN
+- fix(check-name): accept names that are a single letter or number
+- docs(uuid): say that unparse reads 16 bytes, not 8
+- fix(accessory): unlink controller storage when a bridged accessory is removed
+- fix(accessory): report slow and timed out handlers through the bridged accessory
+- fix(accessory): track the primary service of a restored accessory
+- fix(controller-storage): stop saving restored controller data again after it was cleared
+- fix(accessory): drop client event registrations when a bridged accessory is removed
+- fix(accessory): answer an Identify write of false instead of letting it time out
+- fix(accessory): handle a paired identify without a set listener on the Identify characteristic
+- fix(characteristic): reject instead of throwing when a legacy callback supplies an illegal value
+- fix(characteristic): recompute the configuration number when setProps is called after publish
+- refactor(accessory): share the read and write timeout handling and answer an empty write at once
+- fix(server): answer a malformed request URL with 400 instead of crashing
+- fix(server): only accept the proxy socket on the internal loopback HTTP server
+- fix(server): wait for the whole HTTP response before writing event notifications
+- fix(server): cap the size of request bodies, with a lower limit before pair-verify
+- fix(crypto): keep a frame whose length header arrived split across two TCP packets
+- fix(server): refuse pair-verify on a connection that is already verified
+- fix(server): answer /pairings requests with an unexpected state or method
+- fix(server): check idle connections again when the first one reaches the idle time
+- fix(server): limit the timed write ttl, unref its timer and clear it when the connection closes
+- fix(advertiser): warn about a system D-Bus connection error instead of crashing
+- fix(tlv): reject a truncated entry in decodeWithLists instead of cutting it short
+- fix(server): skip an event notification whose events were all unregistered
+- fix(server): log the listener count from before the removal in HAPConnection.off()
+- fix(accessory): compare a pairing's public key byte for byte instead of as text
+- refactor: load the service and characteristic definitions without an import cycle
+- test: migrate from jest to vitest
+- chore(lint): switch to the @antfu/eslint-config rules used by homebridge
+- chore: raise the minimum Node.js 22 version to 22.12.0
+- feat: migrate the package to an ES module
+- fix: stop a failed read or write throwing "HAPStatus is not defined" in the ES module build
+- docs: regenerate docs for `v2.3.0`
+
+### Homebridge Dependencies
+
+- `@homebridge/ciao` @ `v1.4.0`
+- `bonjour-hap` @ `v3.11.0`
+
 ## v2.2.3 (2026-08-22)
 
 ### Changes

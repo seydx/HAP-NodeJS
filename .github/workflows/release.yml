@@ -159,9 +159,9 @@ jobs:
       needs.attach-artifact.result == 'success'
     uses: homebridge/.github/.github/workflows/discord-webhooks.yml@latest
     with:
-      title: "HAP-NodeJS Release"
+      title: HAP-NodeJS Release
       description: |
         Version `v${{ needs.publish.outputs.NPM_VERSION }}`
-      url: "https://github.com/homebridge/HAP-NodeJS/releases/tag/v${{ needs.publish.outputs.NPM_VERSION }}"
+      url: 'https://github.com/homebridge/HAP-NodeJS/releases/tag/v${{ needs.publish.outputs.NPM_VERSION }}'
     secrets:
       DISCORD_WEBHOOK: ${{ needs.determine-release-type.outputs.release_type == 'latest' && secrets.DISCORD_WEBHOOK_URL_LATEST || secrets.DISCORD_WEBHOOK_URL_BETA }}

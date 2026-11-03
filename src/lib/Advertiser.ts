@@ -1,15 +1,18 @@
-import ciao, { CiaoService, MDNSServerOptions, Responder, ServiceEvent, ServiceTxt, ServiceType } from "@homebridge/ciao";
-import { InterfaceName, IPAddress } from "@homebridge/ciao/lib/NetworkManager";
-import dbus, { DBusInterface, MessageBus } from "@homebridge/dbus-native";
-import assert from "assert";
-import bonjour, { Advertisement, Bonjour } from "bonjour-hap";
-import crypto from "crypto";
-import createDebug from "debug";
-import { EventEmitter } from "events";
-import { AccessoryInfo } from "./model/AccessoryInfo";
-import { PromiseTimeout } from "./util/promise-utils";
+import assert from 'node:assert'
+import { Buffer } from 'node:buffer'
+import crypto from 'node:crypto'
+import { EventEmitter } from 'node:events'
 
-const debug = createDebug("HAP-NodeJS:Advertiser");
+import ciao, { CiaoService, MDNSServerOptions, Responder, ServiceEvent, ServiceTxt, ServiceType } from '@homebridge/ciao'
+import { InterfaceName, IPAddress } from '@homebridge/ciao/lib/NetworkManager.js'
+import bonjour, { Advertisement, Bonjour } from 'bonjour-hap'
+import dbus, { DBusInterface, MessageBus, variantValue } from 'dbus-native'
+import createDebug from 'debug'
+
+import { AccessoryInfo } from './model/AccessoryInfo.js'
+import { PromiseTimeout } from './util/promise-utils.js'
+
+const debug = createDebug('HAP-NodeJS:Advertiser')
 
 /**
  * This enum lists all bitmasks for all known status flags.
@@ -17,6 +20,7 @@ const debug = createDebug("HAP-NodeJS:Advertiser");
  *
  * @group Advertiser
  */
+// eslint-disable-next-line no-restricted-syntax
 export const enum StatusFlag {
   NOT_PAIRED = 0x01,
   NOT_JOINED_WIFI = 0x02,
@@ -29,6 +33,7 @@ export const enum StatusFlag {
  *
  * @group Advertiser
  */
+// eslint-disable-next-line no-restricted-syntax
 export const enum PairingFeatureFlag {
   SUPPORTS_HARDWARE_AUTHENTICATION = 0x01,
   SUPPORTS_SOFTWARE_AUTHENTICATION = 0x02,
@@ -37,12 +42,13 @@ export const enum PairingFeatureFlag {
 /**
  * @group Advertiser
  */
+// eslint-disable-next-line no-restricted-syntax
 export const enum AdvertiserEvent {
   /**
    * Emitted if the underlying mDNS advertisers signals, that the service name
    * was automatically changed due to some naming conflicts on the network.
    */
-  UPDATED_NAME = "updated-name",
+  UPDATED_NAME = 'updated-name',
 }
 
 /**
@@ -63,13 +69,13 @@ export interface ServiceNetworkOptions {
    * If the service is set to advertise on a given interface, though the MDNSServer is
    * configured to ignore this interface, the service won't be advertised on the interface.
    */
-  restrictedAddresses?: (InterfaceName | IPAddress)[];
+  restrictedAddresses?: (InterfaceName | IPAddress)[]
   /**
    * The service won't advertise ipv6 address records.
    * This can be used to simulate binding on 0.0.0.0.
    * May be combined with {@link restrictedAddresses}.
    */
-  disabledIpv6?: boolean;
+  disabledIpv6?: boolean
 }
 
 /**
@@ -80,17 +86,17 @@ export interface ServiceNetworkOptions {
  * @group Advertiser
  */
 export interface Advertiser {
-  initPort(port: number): void;
+  initPort(port: number): void
 
-  startAdvertising(): Promise<void>;
+  startAdvertising(): Promise<void>
 
-  updateAdvertisement(silent?: boolean): void;
+  updateAdvertisement(silent?: boolean): void
 
-  destroy(): void;
+  destroy(): void
 
-  on(event: "updated-name", listener: (name: string) => void): this;
+  on(event: 'updated-name', listener: (name: string) => void): this
 
-  emit(event: "updated-name", name: string): boolean;
+  emit(event: 'updated-name', name: string): boolean
 }
 
 /**
@@ -104,92 +110,92 @@ export interface Advertiser {
  * @group Advertiser
  */
 export class CiaoAdvertiser extends EventEmitter implements Advertiser {
-  static protocolVersion = "1.1";
-  static protocolVersionService = "1.1.0";
+  static protocolVersion = '1.1'
+  static protocolVersionService = '1.1.0'
 
-  private readonly accessoryInfo: AccessoryInfo;
-  private readonly setupHash: string;
+  private readonly accessoryInfo: AccessoryInfo
+  private readonly setupHash: string
 
-  private readonly responder: Responder;
-  private readonly advertisedService: CiaoService;
+  private readonly responder: Responder
+  private readonly advertisedService: CiaoService
 
   constructor(accessoryInfo: AccessoryInfo, responderOptions?: MDNSServerOptions, serviceOptions?: ServiceNetworkOptions) {
-    super();
-    this.accessoryInfo = accessoryInfo;
-    this.setupHash = CiaoAdvertiser.computeSetupHash(accessoryInfo);
+    super()
+    this.accessoryInfo = accessoryInfo
+    this.setupHash = CiaoAdvertiser.computeSetupHash(accessoryInfo)
 
     this.responder = ciao.getResponder({
       ...responderOptions,
-    });
+    })
     this.advertisedService = this.responder.createService({
       name: this.accessoryInfo.displayName,
       type: ServiceType.HAP,
       txt: CiaoAdvertiser.createTxt(accessoryInfo, this.setupHash),
       // host will default now to <displayName>.local, spaces replaced with dashes
       ...serviceOptions,
-    });
-    this.advertisedService.on(ServiceEvent.NAME_CHANGED, this.emit.bind(this, AdvertiserEvent.UPDATED_NAME));
+    })
+    this.advertisedService.on(ServiceEvent.NAME_CHANGED, this.emit.bind(this, AdvertiserEvent.UPDATED_NAME))
 
-    debug(`Preparing Advertiser for '${this.accessoryInfo.displayName}' using ciao backend!`);
+    debug(`Preparing Advertiser for '${this.accessoryInfo.displayName}' using ciao backend!`)
   }
 
   public initPort(port: number): void {
-    this.advertisedService.updatePort(port);
+    this.advertisedService.updatePort(port)
   }
 
   public startAdvertising(): Promise<void> {
-    debug(`Starting to advertise '${this.accessoryInfo.displayName}' using ciao backend!`);
-    return this.advertisedService!.advertise();
+    debug(`Starting to advertise '${this.accessoryInfo.displayName}' using ciao backend!`)
+    return this.advertisedService!.advertise()
   }
 
   public updateAdvertisement(silent?: boolean): void {
-    const txt = CiaoAdvertiser.createTxt(this.accessoryInfo, this.setupHash);
-    debug("Updating txt record (txt: %o, silent: %d)", txt, silent);
-    this.advertisedService!.updateTxt(txt, silent);
+    const txt = CiaoAdvertiser.createTxt(this.accessoryInfo, this.setupHash)
+    debug('Updating txt record (txt: %o, silent: %d)', txt, silent)
+    this.advertisedService!.updateTxt(txt, silent)
   }
 
   public async destroy(): Promise<void> {
     // advertisedService.destroy(); is called implicitly via the shutdown call
-    await this.responder.shutdown();
-    this.removeAllListeners();
+    await this.responder.shutdown()
+    this.removeAllListeners()
   }
 
   static createTxt(accessoryInfo: AccessoryInfo, setupHash: string): ServiceTxt {
-    const statusFlags: StatusFlag[] = [];
+    const statusFlags: StatusFlag[] = []
 
     if (!accessoryInfo.paired()) {
-      statusFlags.push(StatusFlag.NOT_PAIRED);
+      statusFlags.push(StatusFlag.NOT_PAIRED)
     }
 
     return {
-      "c#": accessoryInfo.getConfigVersion(), // current configuration number
-      ff: CiaoAdvertiser.ff(), // pairing feature flags
-      id: accessoryInfo.username, // device id
-      md: accessoryInfo.model, // model name
-      pv: CiaoAdvertiser.protocolVersion, // protocol version
-      "s#": 1, // current state number (must be 1)
-      sf: CiaoAdvertiser.sf(...statusFlags), // status flags
-      ci: accessoryInfo.category,
-      sh: setupHash,
-    };
+      'c#': accessoryInfo.getConfigVersion(), // current configuration number
+      'ff': CiaoAdvertiser.ff(), // pairing feature flags
+      'id': accessoryInfo.username, // device id
+      'md': accessoryInfo.model, // model name
+      'pv': CiaoAdvertiser.protocolVersion, // protocol version
+      's#': 1, // current state number (must be 1)
+      'sf': CiaoAdvertiser.sf(...statusFlags), // status flags
+      'ci': accessoryInfo.category,
+      'sh': setupHash,
+    }
   }
 
   static computeSetupHash(accessoryInfo: AccessoryInfo): string {
-    const hash = crypto.createHash("sha512");
-    hash.update(accessoryInfo.setupID + accessoryInfo.username.toUpperCase());
-    return hash.digest().subarray(0, 4).toString("base64");
+    const hash = crypto.createHash('sha512')
+    hash.update(accessoryInfo.setupID + accessoryInfo.username.toUpperCase())
+    return hash.digest().subarray(0, 4).toString('base64')
   }
 
   public static ff(...flags: PairingFeatureFlag[]): number {
-    let value = 0;
-    flags.forEach(flag => value |= flag);
-    return value;
+    let value = 0
+    flags.forEach(flag => value |= flag)
+    return value
   }
 
   public static sf(...flags: StatusFlag[]): number {
-    let value = 0;
-    flags.forEach(flag => value |= flag);
-    return value;
+    let value = 0
+    flags.forEach(flag => value |= flag)
+    return value
   }
 }
 
@@ -199,143 +205,164 @@ export class CiaoAdvertiser extends EventEmitter implements Advertiser {
  * @group Advertiser
  */
 export class BonjourHAPAdvertiser extends EventEmitter implements Advertiser {
-  private readonly accessoryInfo: AccessoryInfo;
-  private readonly setupHash: string;
-  private readonly serviceOptions?: ServiceNetworkOptions;
+  private readonly accessoryInfo: AccessoryInfo
+  private readonly setupHash: string
+  private readonly serviceOptions?: ServiceNetworkOptions
 
-  private bonjour: Bonjour;
-  private advertisement?: Advertisement;
+  private bonjour: Bonjour
+  private advertisement?: Advertisement
 
-  private port?: number;
-  private destroyed = false;
+  private port?: number
+  private destroyed = false
 
   constructor(accessoryInfo: AccessoryInfo, serviceOptions?: ServiceNetworkOptions) {
-    super();
-    this.accessoryInfo = accessoryInfo;
-    this.setupHash = CiaoAdvertiser.computeSetupHash(accessoryInfo);
-    this.serviceOptions = serviceOptions;
+    super()
+    this.accessoryInfo = accessoryInfo
+    this.setupHash = CiaoAdvertiser.computeSetupHash(accessoryInfo)
+    this.serviceOptions = serviceOptions
 
-    this.bonjour = bonjour();
-    debug(`Preparing Advertiser for '${this.accessoryInfo.displayName}' using bonjour-hap backend!`);
+    this.bonjour = bonjour()
+    debug(`Preparing Advertiser for '${this.accessoryInfo.displayName}' using bonjour-hap backend!`)
   }
 
   public initPort(port: number): void {
-    this.port = port;
+    this.port = port
   }
 
   public startAdvertising(): Promise<void> {
-    assert(!this.destroyed, "Can't advertise on a destroyed bonjour instance!");
+    assert(!this.destroyed, 'Can\'t advertise on a destroyed bonjour instance!')
     if (this.port == null) {
-      throw new Error("Tried starting bonjour-hap advertisement without initializing port!");
+      throw new Error('Tried starting bonjour-hap advertisement without initializing port!')
     }
 
-    debug(`Starting to advertise '${this.accessoryInfo.displayName}' using bonjour-hap backend!`);
+    debug(`Starting to advertise '${this.accessoryInfo.displayName}' using bonjour-hap backend!`)
 
     if (this.advertisement) {
-      this.destroy();
+      this.destroy()
     }
 
-    const hostname = this.accessoryInfo.username.replace(/:/ig, "_") + ".local";
+    const hostname = `${this.accessoryInfo.username.replace(/:/g, '_')}.local`
 
     this.advertisement = this.bonjour.publish({
       name: this.accessoryInfo.displayName,
-      type: "hap",
+      type: 'hap',
       port: this.port,
       txt: CiaoAdvertiser.createTxt(this.accessoryInfo, this.setupHash),
       host: hostname,
       addUnsafeServiceEnumerationRecord: true,
       ...this.serviceOptions,
-    });
+    })
 
-    return PromiseTimeout(1);
+    return PromiseTimeout(1)
   }
 
   public updateAdvertisement(silent?: boolean): void {
-    const txt = CiaoAdvertiser.createTxt(this.accessoryInfo, this.setupHash);
-    debug("Updating txt record (txt: %o, silent: %d)", txt, silent);
+    const txt = CiaoAdvertiser.createTxt(this.accessoryInfo, this.setupHash)
+    debug('Updating txt record (txt: %o, silent: %d)', txt, silent)
 
     if (this.advertisement) {
-      this.advertisement.updateTxt(txt, silent);
+      this.advertisement.updateTxt(txt, silent)
     }
   }
 
   public destroy(): void {
     if (this.advertisement) {
       this.advertisement.stop(() => {
-        this.advertisement!.destroy();
-        this.advertisement = undefined;
-        this.bonjour.destroy();
-      });
+        this.advertisement!.destroy()
+        this.advertisement = undefined
+        this.bonjour.destroy()
+      })
     } else {
-      this.bonjour.destroy();
+      this.bonjour.destroy()
     }
   }
-
 }
 
 function messageBusConnectionResult(bus: MessageBus): Promise<void> {
   return new Promise((resolve, reject) => {
     const errorHandler = (error: Error) => {
-      // eslint-disable-next-line @typescript-eslint/no-use-before-define
-      bus.connection.removeListener("connect", connectHandler);
-      reject(error);
-    };
+      // eslint-disable-next-line ts/no-use-before-define
+      bus.connection.removeListener('connect', connectHandler)
+      reject(error)
+    }
     const connectHandler = () => {
-      bus.connection.removeListener("error", errorHandler);
-      resolve();
-    };
+      bus.connection.removeListener('error', errorHandler)
+      resolve()
+    }
 
-    bus.connection.once("connect", connectHandler);
-    bus.connection.once("error", errorHandler);
-  });
+    bus.connection.once('connect', connectHandler)
+    bus.connection.once('error', errorHandler)
+  })
 }
 
 /**
  * @group Advertiser
  */
 export class DBusInvokeError extends Error {
-  readonly errorName: string;
+  readonly errorName: string
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  constructor(errorObject: { name: string, message: any }) {
-    super();
+  constructor(errorObject: { name: string, message: any, dbusName?: string }) {
+    super()
 
-    Object.setPrototypeOf(this, DBusInvokeError.prototype);
+    Object.setPrototypeOf(this, DBusInvokeError.prototype)
 
-    this.name = "DBusInvokeError";
+    this.name = 'DBusInvokeError'
 
-    this.errorName = errorObject.name;
+    // dbus-native's DBusError carries the D-Bus error name in `dbusName`; its `name` is just "DBusError"
+    this.errorName = errorObject.dbusName ?? errorObject.name
 
     if (Array.isArray(errorObject.message) && errorObject.message.length === 1) {
-      this.message = errorObject.message[0];
+      this.message = errorObject.message[0]
     } else {
-      this.message = errorObject.message.toString();
+      this.message = errorObject.message.toString()
     }
   }
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function dbusInvoke( bus: MessageBus, destination: string, path: string, dbusInterface: string, member: string, others?: any): Promise<any> {
-  return new Promise((resolve, reject) => {
-    const command = {
-      destination,
-      path,
-      interface: dbusInterface,
-      member,
-      ...(others || {}),
-    };
+async function dbusInvoke(bus: MessageBus, destination: string, path: string, dbusInterface: string, member: string, others?: any): Promise<any> {
+  const command = {
+    destination,
+    path,
+    interface: dbusInterface,
+    member,
+    ...(others || {}),
+  }
 
-    bus.invoke(command, (err, result) => {
-      if (err) {
-        reject(new DBusInvokeError(err));
-      } else {
-        resolve(result);
-      }
-    });
-
-  });
+  try {
+    return await bus.invoke(command)
+  } catch (error) {
+    throw new DBusInvokeError(error)
+  }
 }
 
+/**
+ * Connect to the system bus.
+ *
+ * dbus-native turns an exception raised while handling an incoming message into a `handlerError` event on the
+ * connection, and crashes the process when nothing listens for it. The system bus refusing our Hello or a signal
+ * subscription (see https://github.com/homebridge/HAP-NodeJS/issues/993) both arrive that way, so report them instead.
+ *
+ * The same goes for an `error` event, like the socket to the system bus failing.
+ * A failure to connect in the first place is reported through the calls made on the bus, so it is only logged for debugging.
+ */
+function systemBus(): MessageBus {
+  const bus = dbus.systemBus()
+  let connected = false
+  bus.connection.once('connect', () => {
+    connected = true
+  })
+  bus.connection.on('handlerError', (error) => {
+    console.warn(`The system D-Bus reported an error: ${error.message}`)
+  })
+  bus.connection.on('error', (error) => {
+    if (connected) {
+      console.warn(`The connection to the system D-Bus failed: ${error.message}`)
+    } else {
+      debug('Failed to connect to the system D-Bus: %s', error.message)
+    }
+  })
+  return bus
+}
 
 /**
  * AvahiServerState.
@@ -344,13 +371,14 @@ function dbusInvoke( bus: MessageBus, destination: string, path: string, dbusInt
  *
  * @group Advertiser
  */
+// eslint-disable-next-line no-restricted-syntax
 const enum AvahiServerState {
   // noinspection JSUnusedGlobalSymbols
   INVALID = 0,
   REGISTERING,
   RUNNING,
   COLLISION,
-  FAILURE
+  FAILURE,
 }
 
 /**
@@ -363,77 +391,77 @@ const enum AvahiServerState {
  * @group Advertiser
  */
 export class AvahiAdvertiser extends EventEmitter implements Advertiser {
-  private readonly accessoryInfo: AccessoryInfo;
-  private readonly setupHash: string;
+  private readonly accessoryInfo: AccessoryInfo
+  private readonly setupHash: string
 
-  private port?: number;
+  private port?: number
 
-  private bus?: MessageBus;
-  private avahiServerInterface?: DBusInterface;
-  private path?: string;
+  private bus?: MessageBus
+  private avahiServerInterface?: DBusInterface
+  private path?: string
 
-  private readonly stateChangeHandler: (state: AvahiServerState) => void;
+  private readonly stateChangeHandler: (state: AvahiServerState) => void
 
   constructor(accessoryInfo: AccessoryInfo) {
-    super();
-    this.accessoryInfo = accessoryInfo;
-    this.setupHash = CiaoAdvertiser.computeSetupHash(accessoryInfo);
+    super()
+    this.accessoryInfo = accessoryInfo
+    this.setupHash = CiaoAdvertiser.computeSetupHash(accessoryInfo)
 
-    debug(`Preparing Advertiser for '${this.accessoryInfo.displayName}' using Avahi backend!`);
+    debug(`Preparing Advertiser for '${this.accessoryInfo.displayName}' using Avahi backend!`)
 
-    this.bus = dbus.systemBus();
+    this.bus = systemBus()
 
-    this.stateChangeHandler = this.handleStateChangedEvent.bind(this);
+    this.stateChangeHandler = this.handleStateChangedEvent.bind(this)
   }
 
   private createTxt(): Array<Buffer> {
     return Object
       .entries(CiaoAdvertiser.createTxt(this.accessoryInfo, this.setupHash))
-      .map((el: Array<string>) => Buffer.from(el[0] + "=" + el[1]));
+      .map((el: Array<string>) => Buffer.from(`${el[0]}=${el[1]}`))
   }
 
   public initPort(port: number): void {
-    this.port = port;
+    this.port = port
   }
 
   public async startAdvertising(): Promise<void> {
     if (this.port == null) {
-      throw new Error("Tried starting Avahi advertisement without initializing port!");
+      throw new Error('Tried starting Avahi advertisement without initializing port!')
     }
     if (!this.bus) {
-      throw new Error("Tried to start Avahi advertisement on a destroyed advertiser!");
+      throw new Error('Tried to start Avahi advertisement on a destroyed advertiser!')
     }
 
-    debug(`Starting to advertise '${this.accessoryInfo.displayName}' using Avahi backend!`);
+    debug(`Starting to advertise '${this.accessoryInfo.displayName}' using Avahi backend!`)
 
-    this.path = await AvahiAdvertiser.avahiInvoke(this.bus, "/", "Server", "EntryGroupNew") as string;
-    await AvahiAdvertiser.avahiInvoke(this.bus, this.path, "EntryGroup", "AddService", {
+    this.path = await AvahiAdvertiser.avahiInvoke(this.bus, '/', 'Server', 'EntryGroupNew') as string
+    await AvahiAdvertiser.avahiInvoke(this.bus, this.path, 'EntryGroup', 'AddService', {
       body: [
         -1, // interface
         -1, // protocol
         0, // flags
         this.accessoryInfo.displayName, // name
-        "_hap._tcp", // type
-        "", // domain
-        "", // host
+        '_hap._tcp', // type
+        '', // domain
+        '', // host
         this.port, // port
         this.createTxt(), // txt
       ],
-      signature: "iiussssqaay",
-    });
-    await AvahiAdvertiser.avahiInvoke(this.bus, this.path, "EntryGroup", "Commit");
+      signature: 'iiussssqaay',
+    })
+    await AvahiAdvertiser.avahiInvoke(this.bus, this.path, 'EntryGroup', 'Commit')
 
     try {
       if (!this.avahiServerInterface) {
-        this.avahiServerInterface = await AvahiAdvertiser.avahiInterface(this.bus, "Server");
-        this.avahiServerInterface.on("StateChanged", this.stateChangeHandler);
+        this.avahiServerInterface = await AvahiAdvertiser.avahiInterface(this.bus, 'Server')
+        this.avahiServerInterface.on('StateChanged', this.stateChangeHandler)
       }
     } catch (error) {
       // We have some problem on Synology https://github.com/homebridge/HAP-NodeJS/issues/993
-      console.warn("Failed to create listener for avahi-daemon server state. The system will not be notified about restarts of avahi-daemon " +
-        "and will therefore stay undiscoverable in those instances. Error message: " + error);
+      console.warn('Failed to create listener for avahi-daemon server state. The system will not be notified about restarts of avahi-daemon '
+        + `and will therefore stay undiscoverable in those instances. Error message: ${error}`)
       if (error.stack) {
-        debug("Detailed error: " + error.stack);
+        debug(`Detailed error: ${error.stack}`)
       }
     }
   }
@@ -446,117 +474,123 @@ export class AvahiAdvertiser extends EventEmitter implements Advertiser {
    */
   private handleStateChangedEvent(state: AvahiServerState): void {
     if (state === AvahiServerState.RUNNING && this.path) {
-      debug("Found Avahi daemon to have restarted!");
+      debug('Found Avahi daemon to have restarted!')
       this.startAdvertising()
-        .catch(reason => console.error("Could not (re-)create mDNS advertisement. The HAP-Server won't be discoverable: " + reason));
+        .catch(reason => console.error(`Could not (re-)create mDNS advertisement. The HAP-Server won't be discoverable: ${reason}`))
     }
   }
 
   public async updateAdvertisement(silent?: boolean): Promise<void> {
     if (!this.bus) {
-      throw new Error("Tried to update Avahi advertisement on a destroyed advertiser!");
+      throw new Error('Tried to update Avahi advertisement on a destroyed advertiser!')
     }
     if (!this.path) {
-      debug("Tried to update advertisement without a valid `path`!");
-      return;
+      debug('Tried to update advertisement without a valid `path`!')
+      return
     }
 
-    debug("Updating txt record (txt: %o, silent: %d)", CiaoAdvertiser.createTxt(this.accessoryInfo, this.setupHash), silent);
+    debug('Updating txt record (txt: %o, silent: %d)', CiaoAdvertiser.createTxt(this.accessoryInfo, this.setupHash), silent)
 
     try {
-      await AvahiAdvertiser.avahiInvoke(this.bus, this.path, "EntryGroup", "UpdateServiceTxt", {
-        body: [-1, -1, 0, this.accessoryInfo.displayName, "_hap._tcp", "", this.createTxt()],
-        signature: "iiusssaay",
-      });
+      await AvahiAdvertiser.avahiInvoke(this.bus, this.path, 'EntryGroup', 'UpdateServiceTxt', {
+        body: [
+          -1,
+          -1,
+          0,
+          this.accessoryInfo.displayName,
+          '_hap._tcp',
+          '',
+          this.createTxt(),
+        ],
+        signature: 'iiusssaay',
+      })
     } catch (error) {
-      console.error("Failed to update avahi advertisement: " + error);
+      console.error(`Failed to update avahi advertisement: ${error}`)
     }
   }
 
   public async destroy(): Promise<void> {
     if (!this.bus) {
-      throw new Error("Tried to destroy Avahi advertisement on a destroyed advertiser!");
+      throw new Error('Tried to destroy Avahi advertisement on a destroyed advertiser!')
     }
 
     if (this.path) {
       try {
-        await AvahiAdvertiser.avahiInvoke(this.bus, this.path, "EntryGroup", "Free");
+        await AvahiAdvertiser.avahiInvoke(this.bus, this.path, 'EntryGroup', 'Free')
       } catch (error) {
         // Typically, this fails if e.g. avahi service was stopped in the meantime.
-        debug("Destroying Avahi advertisement failed: " + error);
+        debug(`Destroying Avahi advertisement failed: ${error}`)
       }
-      this.path = undefined;
+      this.path = undefined
     }
 
     if (this.avahiServerInterface) {
-      this.avahiServerInterface.removeListener("StateChanged", this.stateChangeHandler);
-      this.avahiServerInterface = undefined;
+      this.avahiServerInterface.removeListener('StateChanged', this.stateChangeHandler)
+      this.avahiServerInterface = undefined
     }
 
-    this.bus.connection.stream.destroy();
-    this.bus = undefined;
+    this.bus.connection.stream.destroy()
+    this.bus = undefined
   }
 
   public static async isAvailable(): Promise<boolean> {
-    const bus = dbus.systemBus();
+    const bus = systemBus()
 
     try {
       try {
-        await messageBusConnectionResult(bus);
+        await messageBusConnectionResult(bus)
       } catch (error) {
-        debug("Avahi/DBus classified unavailable due to missing dbus interface!");
-        return false;
+        debug('Avahi/DBus classified unavailable due to missing dbus interface!')
+        return false
       }
 
       try {
-        const version = await this.avahiInvoke(bus, "/", "Server", "GetVersionString");
-        debug("Detected Avahi over DBus interface running version '%s'.", version);
+        const version = await this.avahiInvoke(bus, '/', 'Server', 'GetVersionString')
+        debug('Detected Avahi over DBus interface running version \'%s\'.', version)
       } catch (error) {
-        debug("Avahi/DBus classified unavailable due to missing avahi interface!");
-        return false;
+        debug('Avahi/DBus classified unavailable due to missing avahi interface!')
+        return false
       }
 
-      return true;
+      return true
     } finally {
-      bus.connection.stream.destroy();
+      bus.connection.stream.destroy()
     }
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private static avahiInvoke(bus: MessageBus, path: string, dbusInterface: string, member: string, others?: any): Promise<any> {
     return dbusInvoke(
       bus,
-      "org.freedesktop.Avahi",
+      'org.freedesktop.Avahi',
       path,
       `org.freedesktop.Avahi.${dbusInterface}`,
       member,
       others,
-    );
+    )
   }
 
   private static avahiInterface(bus: MessageBus, dbusInterface: string): Promise<DBusInterface> {
     return new Promise((resolve, reject) => {
       bus
-        .getService("org.freedesktop.Avahi")
-        .getInterface("/", "org.freedesktop.Avahi." + dbusInterface, (error, iface) => {
+        .getService('org.freedesktop.Avahi')
+        .getInterface('/', `org.freedesktop.Avahi.${dbusInterface}`, (error, iface) => {
           if (error || !iface) {
-            reject(error ?? new Error("Interface not present!"));
+            reject(error ?? new Error('Interface not present!'))
           } else {
-            resolve(iface);
+            resolve(iface)
           }
-        });
-    });
+        })
+    })
   }
 }
 
-type ResolvedServiceTxt = Array<Array<string | Buffer>>;
+type ResolvedServiceTxt = Array<Array<string | Buffer>>
 
 const RESOLVED_PERMISSIONS_ERRORS = [
-  "org.freedesktop.DBus.Error.AccessDenied",
-  "org.freedesktop.DBus.Error.AuthFailed",
-  "org.freedesktop.DBus.Error.InteractiveAuthorizationRequired",
-];
-
+  'org.freedesktop.DBus.Error.AccessDenied',
+  'org.freedesktop.DBus.Error.AuthFailed',
+  'org.freedesktop.DBus.Error.InteractiveAuthorizationRequired',
+]
 
 /**
  * Advertiser based on the systemd-resolved D-Bus library.
@@ -565,176 +599,180 @@ const RESOLVED_PERMISSIONS_ERRORS = [
  * @group Advertiser
  */
 export class ResolvedAdvertiser extends EventEmitter implements Advertiser {
-  private readonly accessoryInfo: AccessoryInfo;
-  private readonly setupHash: string;
+  private readonly accessoryInfo: AccessoryInfo
+  private readonly setupHash: string
 
-  private port?: number;
+  private port?: number
 
-  private bus?: MessageBus;
-  private path?: string;
+  private bus?: MessageBus
+  private path?: string
 
   constructor(accessoryInfo: AccessoryInfo) {
-    super();
-    this.accessoryInfo = accessoryInfo;
-    this.setupHash = CiaoAdvertiser.computeSetupHash(accessoryInfo);
+    super()
+    this.accessoryInfo = accessoryInfo
+    this.setupHash = CiaoAdvertiser.computeSetupHash(accessoryInfo)
 
-    this.bus = dbus.systemBus();
+    this.bus = systemBus()
 
-    debug(`Preparing Advertiser for '${this.accessoryInfo.displayName}' using systemd-resolved backend!`);
+    debug(`Preparing Advertiser for '${this.accessoryInfo.displayName}' using systemd-resolved backend!`)
   }
 
   private createTxt(): ResolvedServiceTxt {
     return Object
       .entries(CiaoAdvertiser.createTxt(this.accessoryInfo, this.setupHash))
-      .map((el: Array<string>) => [el[0].toString(), Buffer.from(el[1].toString())]);
+      .map((el: Array<string>) => [
+        el[0].toString(),
+        Buffer.from(el[1].toString()),
+      ])
   }
 
   public initPort(port: number): void {
-    this.port = port;
+    this.port = port
   }
 
   public async startAdvertising(): Promise<void> {
     if (this.port == null) {
-      throw new Error("Tried starting systemd-resolved advertisement without initializing port!");
+      throw new Error('Tried starting systemd-resolved advertisement without initializing port!')
     }
     if (!this.bus) {
-      throw new Error("Tried to start systemd-resolved advertisement on a destroyed advertiser!");
+      throw new Error('Tried to start systemd-resolved advertisement on a destroyed advertiser!')
     }
 
-    debug(`Starting to advertise '${this.accessoryInfo.displayName}' using systemd-resolved backend!`);
+    debug(`Starting to advertise '${this.accessoryInfo.displayName}' using systemd-resolved backend!`)
 
     try {
-      this.path = await ResolvedAdvertiser.managerInvoke(this.bus, "RegisterService", {
+      this.path = await ResolvedAdvertiser.managerInvoke(this.bus, 'RegisterService', {
         body: [
           this.accessoryInfo.displayName, // name
           this.accessoryInfo.displayName, // name_template
-          "_hap._tcp", // type
+          '_hap._tcp', // type
           this.port, // service_port
           0, // service_priority
           0, // service_weight
-          [this.createTxt()], // txt_datas
+          [
+            this.createTxt(),
+          ], // txt_datas
         ],
-        signature: "sssqqqaa{say}",
-      });
+        signature: 'sssqqqaa{say}',
+      })
     } catch (error) {
       if (error instanceof DBusInvokeError) {
         if (RESOLVED_PERMISSIONS_ERRORS.includes(error.errorName)) {
-          error.message = `Permissions issue. See https://homebridge.io/w/mDNS-Options for more info. ${error.message}`;
+          error.message = `Permissions issue. See https://homebridge.io/w/mDNS-Options for more info. ${error.message}`
         }
       }
-      throw error;
+      throw error
     }
   }
 
   public async updateAdvertisement(silent?: boolean): Promise<void> {
     if (!this.bus) {
-      throw new Error("Tried to update systemd-resolved advertisement on a destroyed advertiser!");
+      throw new Error('Tried to update systemd-resolved advertisement on a destroyed advertiser!')
     }
 
-    debug("Updating txt record (txt: %o, silent: %d)", CiaoAdvertiser.createTxt(this.accessoryInfo, this.setupHash), silent);
+    debug('Updating txt record (txt: %o, silent: %d)', CiaoAdvertiser.createTxt(this.accessoryInfo, this.setupHash), silent)
 
     // Currently, systemd-resolved has no way to update an existing record.
-    await this.stopAdvertising();
-    await this.startAdvertising();
+    await this.stopAdvertising()
+    await this.startAdvertising()
   }
 
   private async stopAdvertising(): Promise<void> {
     if (!this.bus) {
-      throw new Error("Tried to destroy systemd-resolved advertisement on a destroyed advertiser!");
+      throw new Error('Tried to destroy systemd-resolved advertisement on a destroyed advertiser!')
     }
 
     if (this.path) {
       try {
-        await ResolvedAdvertiser.managerInvoke(this.bus, "UnregisterService", {
+        await ResolvedAdvertiser.managerInvoke(this.bus, 'UnregisterService', {
           body: [this.path],
-          signature: "o",
-        });
+          signature: 'o',
+        })
       } catch (error) {
         // Typically, this fails if e.g. systemd-resolved service was stopped in the meantime.
-        debug("Destroying systemd-resolved advertisement failed: " + error);
+        debug(`Destroying systemd-resolved advertisement failed: ${error}`)
       }
-      this.path = undefined;
+      this.path = undefined
     }
   }
 
   public async destroy(): Promise<void> {
     if (!this.bus) {
-      throw new Error("Tried to destroy systemd-resolved advertisement on a destroyed advertiser!");
+      throw new Error('Tried to destroy systemd-resolved advertisement on a destroyed advertiser!')
     }
 
-    await this.stopAdvertising();
+    await this.stopAdvertising()
 
-    this.bus.connection.stream.destroy();
-    this.bus = undefined;
+    this.bus.connection.stream.destroy()
+    this.bus = undefined
   }
 
   public static async isAvailable(): Promise<boolean> {
-    const bus = dbus.systemBus();
+    const bus = systemBus()
 
     try {
       try {
-        await messageBusConnectionResult(bus);
+        await messageBusConnectionResult(bus)
       } catch (error) {
-        debug("systemd-resolved/DBus classified unavailable due to missing dbus interface!");
-        return false;
+        debug('systemd-resolved/DBus classified unavailable due to missing dbus interface!')
+        return false
       }
 
       try {
         // Ensure that systemd-resolved is accessible.
-        await this.managerInvoke(bus, "ResolveHostname", {
-          body: [0, "127.0.0.1", 0, 0],
-          signature: "isit",
-        });
-        debug("Detected systemd-resolved over DBus interface running version.");
+        await this.managerInvoke(bus, 'ResolveHostname', {
+          body: [0, '127.0.0.1', 0, 0],
+          signature: 'isit',
+        })
+        debug('Detected systemd-resolved over DBus interface running version.')
       } catch (error) {
-        debug("systemd-resolved/DBus classified unavailable due to missing systemd-resolved interface!");
-        return false;
+        debug('systemd-resolved/DBus classified unavailable due to missing systemd-resolved interface!')
+        return false
       }
 
       try {
         const mdnsStatus = await this.resolvedInvoke(
           bus,
-          "org.freedesktop.DBus.Properties",
-          "Get",
+          'org.freedesktop.DBus.Properties',
+          'Get',
           {
-            body: ["org.freedesktop.resolve1.Manager", "MulticastDNS"],
-            signature: "ss",
+            body: ['org.freedesktop.resolve1.Manager', 'MulticastDNS'],
+            signature: 'ss',
           },
-        );
+        )
 
-        if (mdnsStatus[0][0].type !== "s") {
-          throw new Error("Invalid type for MulticastDNS");
+        const multicastDNS = variantValue(mdnsStatus)
+        if (typeof multicastDNS !== 'string') {
+          throw new TypeError('Invalid type for MulticastDNS')
         }
 
-        if (mdnsStatus[1][0] !== "yes" ) {
-          debug("systemd-resolved/DBus classified unavailable because MulticastDNS is not enabled!");
-          return false;
+        if (multicastDNS !== 'yes') {
+          debug('systemd-resolved/DBus classified unavailable because MulticastDNS is not enabled!')
+          return false
         }
       } catch (error) {
-        debug("systemd-resolved/DBus classified unavailable due to failure checking system status: " + error);
-        return false;
+        debug(`systemd-resolved/DBus classified unavailable due to failure checking system status: ${error}`)
+        return false
       }
 
-      return true;
+      return true
     } finally {
-      bus.connection.stream.destroy();
+      bus.connection.stream.destroy()
     }
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private static resolvedInvoke(bus: MessageBus, dbusInterface: string, member: string, others?: any): Promise<any> {
     return dbusInvoke(
       bus,
-      "org.freedesktop.resolve1",
-      "/org/freedesktop/resolve1",
+      'org.freedesktop.resolve1',
+      '/org/freedesktop/resolve1',
       dbusInterface,
       member,
       others,
-    );
+    )
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private static managerInvoke(bus: MessageBus, member: string, others?: any): Promise<any> {
-    return this.resolvedInvoke(bus, "org.freedesktop.resolve1.Manager", member, others);
+    return this.resolvedInvoke(bus, 'org.freedesktop.resolve1.Manager', member, others)
   }
 }

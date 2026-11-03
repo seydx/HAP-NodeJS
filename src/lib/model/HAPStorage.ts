@@ -1,6 +1,7 @@
-import { accessSync, constants } from "node:fs";
+/* global NodeJS */
+import { accessSync, constants } from 'node:fs'
 
-import { HAPFileStorage } from "./HAPFileStorage";
+import { HAPFileStorage } from './HAPFileStorage.js'
 
 /**
  * A storage HAP-NodeJS can keep its persistent state in: accessory info including the pairings,
@@ -17,37 +18,34 @@ export interface HAPStorageBackend {
   /**
    * Returns the value stored for the given key, or `undefined`.
    */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  getItem(key: string): any;
+  getItem: (key: string) => any
 
   /**
    * Persists the given value, which is a JSON serializable object.
    */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  setItemSync(key: string, value: any): void;
+  setItemSync: (key: string, value: any) => void
 
   /**
    * Removes the value stored for the given key.
    */
-  removeItemSync(key: string): void;
+  removeItemSync: (key: string) => void
 }
 
 /**
  * @group Model
  */
 export class HAPStorage {
+  private static readonly INSTANCE = new HAPStorage()
 
-  private static readonly INSTANCE = new HAPStorage();
-
-  private localStore?: HAPStorageBackend;
-  private customStoragePath?: string;
+  private localStore?: HAPStorageBackend
+  private customStoragePath?: string
 
   public static storage(): HAPStorageBackend {
-    return this.INSTANCE.storage();
+    return this.INSTANCE.storage()
   }
 
   public static setCustomStoragePath(path: string): void {
-    this.INSTANCE.setCustomStoragePath(path);
+    this.INSTANCE.setCustomStoragePath(path)
   }
 
   /**
@@ -55,26 +53,26 @@ export class HAPStorage {
    * the application already persists. Must be called before the first accessory is published.
    */
   public static setCustomStorage(storage: HAPStorageBackend): void {
-    this.INSTANCE.setCustomStorage(storage);
+    this.INSTANCE.setCustomStorage(storage)
   }
 
   public storage(): HAPStorageBackend {
     if (!this.localStore) {
-      const fileStorage = new HAPFileStorage();
+      const fileStorage = new HAPFileStorage()
 
       if (this.customStoragePath) {
         fileStorage.initSync({
           dir: this.customStoragePath,
-        });
+        })
       } else {
-        fileStorage.initSync();
+        fileStorage.initSync()
       }
 
-      this.localStore = fileStorage;
-      this.checkStorageIsWritable();
+      this.localStore = fileStorage
+      this.checkStorageIsWritable()
     }
 
-    return this.localStore;
+    return this.localStore
   }
 
   /**
@@ -93,45 +91,44 @@ export class HAPStorage {
     // read that rather than recomputing it, falling back to whatever we asked
     // for if the shape ever changes.
     const dir: string | undefined = (this.localStore as unknown as { dir?: string })?.dir
-      ?? this.customStoragePath;
+      ?? this.customStoragePath
 
     if (!dir) {
-      return;
+      return
     }
 
     try {
-      accessSync(dir, constants.W_OK);
+      accessSync(dir, constants.W_OK)
     } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
+      const code = (error as NodeJS.ErrnoException).code
 
       // Only a permission problem is worth warning about. A missing directory
       // is not: HAPFileStorage creates it during init, so ENOENT here means we
       // are looking at a path it never used rather than a broken install.
-      if (code !== "EACCES" && code !== "EPERM") {
-        return;
+      if (code !== 'EACCES' && code !== 'EPERM') {
+        return
       }
 
       console.warn(`HAP-NodeJS WARNING: The persist directory '${dir}' is not writable (${code}). `
-        + "Accessories will fail to publish or will lose their pairing state. This usually means the files are "
-        + "owned by a different user than the one running HAP-NodeJS — check the ownership and permissions of "
-        + "that directory and its contents.");
+        + 'Accessories will fail to publish or will lose their pairing state. This usually means the files are '
+        + 'owned by a different user than the one running HAP-NodeJS — check the ownership and permissions of '
+        + 'that directory and its contents.')
     }
   }
 
   public setCustomStoragePath(path: string): void {
     if (this.localStore) {
-      throw new Error("Cannot change storage path after it has already been initialized!");
+      throw new Error('Cannot change storage path after it has already been initialized!')
     }
 
-    this.customStoragePath = path;
+    this.customStoragePath = path
   }
 
   public setCustomStorage(storage: HAPStorageBackend): void {
     if (this.localStore) {
-      throw new Error("Cannot change storage after it has already been initialized!");
+      throw new Error('Cannot change storage after it has already been initialized!')
     }
 
-    this.localStore = storage;
+    this.localStore = storage
   }
-
 }

@@ -17,7 +17,7 @@
 <div class="tsd-signature tsd-anchor-link" id="unparse"><span class="tsd-kind-call-signature">unparse</span><span class="tsd-signature-symbol">(</span><span class="tsd-kind-parameter">buf</span><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">Buffer</span><span class="tsd-signature-symbol">)</span><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">string</span><a href="#unparse" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></div>
 <div class="tsd-description">
 <div class="tsd-comment tsd-typography"><p>Parses the uuid as a string from the given Buffer.
-The parser will use the first 8 bytes.</p>
+The parser will use the first 16 bytes.</p>
 </div>
 <div class="tsd-parameters">
 <h4 class="tsd-parameters-title">Parameters</h4>
@@ -27,11 +27,11 @@ The parser will use the first 8 bytes.</p>
 </div></li></ul></div>
 <h4 class="tsd-returns-title">Returns <span class="tsd-signature-type">string</span></h4><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/homebridge/HAP-NodeJS/blob/029e8165680a0f17a3d02714b0aec3c379c7bc93/src/lib/util/uuid.ts#L39">lib/util/uuid.ts:39</a></li></ul></aside></div></li>
+<li>Defined in <a href="https://github.com/homebridge/HAP-NodeJS/blob/6c9144cc325924dd1ec730b099c0e6c8384a350b/src/lib/util/uuid.ts#L40">lib/util/uuid.ts:40</a></li></ul></aside></div></li>
 <li class="">
 <div class="tsd-signature tsd-anchor-link" id="unparse-1"><span class="tsd-kind-call-signature">unparse</span><span class="tsd-signature-symbol">(</span><span class="tsd-kind-parameter">buf</span><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">Buffer</span><span class="tsd-signature-symbol">,</span> <span class="tsd-kind-parameter">offset</span><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">number</span><span class="tsd-signature-symbol">)</span><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">string</span><a href="#unparse-1" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></div>
 <div class="tsd-description">
-<div class="tsd-comment tsd-typography"><p>Parses the uuid as a string from the given Buffer at the specified offset.</p>
+<div class="tsd-comment tsd-typography"><p>Parses the uuid as a string from the 16 bytes of the given Buffer starting at the specified offset.</p>
 </div>
 <div class="tsd-parameters">
 <h4 class="tsd-parameters-title">Parameters</h4>
@@ -44,7 +44,7 @@ The parser will use the first 8 bytes.</p>
 </div></li></ul></div>
 <h4 class="tsd-returns-title">Returns <span class="tsd-signature-type">string</span></h4><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/homebridge/HAP-NodeJS/blob/029e8165680a0f17a3d02714b0aec3c379c7bc93/src/lib/util/uuid.ts#L45">lib/util/uuid.ts:45</a></li></ul></aside></div></li></ul></section></div>
+<li>Defined in <a href="https://github.com/homebridge/HAP-NodeJS/blob/6c9144cc325924dd1ec730b099c0e6c8384a350b/src/lib/util/uuid.ts#L46">lib/util/uuid.ts:46</a></li></ul></aside></div></li></ul></section></div>
 <div class="col-sidebar">
 <div class="page-menu">
 <div class="tsd-navigation settings">

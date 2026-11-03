@@ -1,21 +1,21 @@
 {
   "compilerOptions": {
-    "allowSyntheticDefaultImports": true,
-    "declaration": true,
-    "declarationMap": true,
-    "esModuleInterop": true,
-    "forceConsistentCasingInFileNames": true,
-    "importHelpers": true,
+    "target": "ES2022",
     "lib": ["ES2023"],
+    "rootDir": "./src",
     "module": "NodeNext",
     "moduleResolution": "node16",
-    "preserveConstEnums": true, // do not remove this option!
-    "outDir": "./dist",
-    "rootDir": "./src",
-    "sourceMap": true,
     "strict": true,
-    "target": "ES2022",
-    "useUnknownInCatchVariables": false
+    "useUnknownInCatchVariables": false,
+    "declaration": true,
+    "declarationMap": true,
+    "importHelpers": true,
+    "outDir": "./dist",
+    "preserveConstEnums": true, // do not remove this option!
+    "sourceMap": true,
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true
   },
   "include": [
     "src/"

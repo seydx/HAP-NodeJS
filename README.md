@@ -2,15 +2,15 @@
   <a href="https://homebridge.io"><img src="https://raw.githubusercontent.com/homebridge/branding/latest/logos/homebridge-color-round-stylized.png" height="140"></a>
 </p>
 <span align="center">
-  
+
 # HAP-NodeJS
-  
-  <a href="https://www.npmjs.com/package/@homebridge/hap-nodejs"><img title="npm version" src="https://shields.io/npm/v/@homebridge/hap-nodejs" ></a>
-  <a href="https://www.npmjs.com/package/@homebridge/hap-nodejs/v/beta"><img title="npm version beta" src="https://shields.io/npm/v/@homebridge/hap-nodejs/beta" ></a>
-  <a href="https://www.npmjs.com/package/@homebridge/hap-nodejs/v/alpha"><img title="npm version alpha" src="https://shields.io/npm/v/@homebridge/hap-nodejs/alpha" ></a><br>
-  <a href="https://www.npmjs.com/package/@homebridge/hap-nodejs"><img title="npm downloads" src="https://shields.io/npm/dt/@homebridge/hap-nodejs" ></a>
-  <a href="https://github.com/homebridge/HAP-NodeJS/actions/workflows/build.yml"><img title="Node Build" src="https://github.com/homebridge/HAP-NodeJS/actions/workflows/build.yml/badge.svg" ></a>
-  <a href='https://coveralls.io/github/homebridge/HAP-NodeJS'><img src='https://coveralls.io/repos/github/homebridge/HAP-NodeJS/badge.svg' alt='Coverage Status' /></a>
+
+<a href="https://www.npmjs.com/package/@homebridge/hap-nodejs"><img title="npm version" src="https://shields.io/npm/v/@homebridge/hap-nodejs" ></a>
+<a href="https://www.npmjs.com/package/@homebridge/hap-nodejs/v/beta"><img title="npm version beta" src="https://shields.io/npm/v/@homebridge/hap-nodejs/beta" ></a>
+<a href="https://www.npmjs.com/package/@homebridge/hap-nodejs/v/alpha"><img title="npm version alpha" src="https://shields.io/npm/v/@homebridge/hap-nodejs/alpha" ></a><br>
+<a href="https://www.npmjs.com/package/@homebridge/hap-nodejs"><img title="npm downloads" src="https://shields.io/npm/dt/@homebridge/hap-nodejs" ></a>
+<a href="https://github.com/homebridge/HAP-NodeJS/actions/workflows/build.yml"><img title="Node Build" src="https://github.com/homebridge/HAP-NodeJS/actions/workflows/build.yml/badge.svg" ></a>
+<a href='https://coveralls.io/github/homebridge/HAP-NodeJS'><img src='https://coveralls.io/repos/github/homebridge/HAP-NodeJS/badge.svg' alt='Coverage Status' /></a>
 
 </span>
 
@@ -20,7 +20,7 @@ which is defined by Apple as part of the HomeKit Framework.
 HAP-NodeJS is intended to be used as a library to easily create your own HomeKit Accessory on a Raspberry Pi,
 Intel Edison, or any other platform that can run Node.js :)  
 If you are searching for a pluggable HomeKit bridge with over a thousand community driven plugins to bring HomeKit
-support to devices which do not support HomeKit out of the box, you may want to look at the 
+support to devices which do not support HomeKit out of the box, you may want to look at the
 [homebridge][project-homebridge] project (which also uses HAP-NodeJS internally).
 
 The implementation tries to follow the HAP specification as close as it can, but may differ in some cases.
@@ -28,7 +28,7 @@ HAP-NodeJS is not an Apple certified HAP implementation, as this is only availab
 
 ## Getting started
 
-You may start by having a look at our [Wiki][wiki], especially have a look at the 
+You may start by having a look at our [Wiki][wiki], especially have a look at the
 [Important HomeKit Terminology][hk-terminology] used in this project.
 
 There is also a pretty detailed guide on [how to start developing with HAP-NodeJS][dev-guide].
@@ -42,10 +42,10 @@ See the FAQ on how to enable [debug output][faq-debug] for HAP-NodeJS.
 ## Projects based on HAP-NodeJS
 
 - [Homebridge][project-homebridge] - HomeKit support for the impatient - Pluggable HomeKit Bridge.  
-    Plugins available for  e.g. Pilight, Telldus TDtool, Savant, Netatmo, Open Pixel Control, HomeWizard, Fritz!Box, 
-    LG WebOS TV, Home Assistant, HomeMatic and many more.
-- [OpenHAB-HomeKit-Bridge][project-openhab-homekit-bridge] - OpenHAB HomeKit Bridge bridges openHAB items to 
-    Apples HomeKit Accessory Protocol.
+  Plugins available for e.g. Pilight, Telldus TDtool, Savant, Netatmo, Open Pixel Control, HomeWizard, Fritz!Box,
+  LG WebOS TV, Home Assistant, HomeMatic and many more.
+- [OpenHAB-HomeKit-Bridge][project-openhab-homekit-bridge] - OpenHAB HomeKit Bridge bridges openHAB items to
+  Apples HomeKit Accessory Protocol.
 - [homekit2mqtt][project-homekit2mqtt] - HomeKit to MQTT bridge.
 - [pimatic-hap][project-pimatic-hap] - Pimatic homekit bridge.
 - [node-red-contrib-homekit][project-node-red-contrib-homekit] - Node-RED nodes to simulate Apple HomeKit devices.
@@ -68,10 +68,8 @@ If you are interested in HAP over BTLE, you might want to check [this][link-hap-
 [hk-terminology]: https://github.com/homebridge/HAP-NodeJS/wiki/HomeKit-Terminology
 [dev-guide]: https://github.com/homebridge/HAP-NodeJS/wiki/Using-HAP-NodeJS-as-a-library
 [faq-debug]: https://github.com/homebridge/HAP-NodeJS/wiki/FAQ#debug-mode
-
 [examples-repo]: https://github.com/homebridge/HAP-NodeJS-examples
 [example-accessories]: https://github.com/homebridge/HAP-NodeJS/tree/latest/src/accessories
-
 [project-homebridge]: https://github.com/homebridge/homebridge
 [project-openhab-homekit-bridge]: https://github.com/htreu/OpenHAB-HomeKit-Bridge
 [project-homekit2mqtt]: https://github.com/hobbyquaker/homekit2mqtt
@@ -79,7 +77,6 @@ If you are interested in HAP over BTLE, you might want to check [this][link-hap-
 [project-node-red-contrib-homekit]: https://github.com/NRCHKB/node-red-contrib-homekit-bridged
 [project-ioBroker-homekit]: https://github.com/ioBroker/ioBroker.homekit2
 [project-accessoryserver]: https://github.com/Appyx/AccessoryServer
-
 [link-alex-skalozub]: https://twitter.com/pieceofsummer
 [link-homekit-research]: https://gist.github.com/pieceofsummer/13272bf76ac1d6b58a30
 [link-apple-dmca]: https://github.com/github/dmca/blob/master/2014/2014-11-04-Apple.md

@@ -1,8 +1,10 @@
-// we just test that we can import index e.g. without any cyclic imports
-import "./index";
+import { describe, expect, it } from 'vitest'
 
-describe("index", () => {
-  test("test index import", () => {
-    expect(true).toBeTruthy();
-  });
-});
+// we just test that we can import index e.g. without any cyclic imports
+import './index.js'
+
+describe('index', () => {
+  it('index import', () => {
+    expect(true).toBeTruthy()
+  })
+})

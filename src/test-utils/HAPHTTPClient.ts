@@ -1,13 +1,18 @@
-import assert from "assert";
-import { once } from "events";
-import { HeaderObject, HTTPParser } from "http-parser-js";
-import { createConnection, Socket } from "net";
-import { HAPMimeTypes, PairingStates, PairMethods, TLVValues } from "../internal-types";
-import { HAPHTTPCode, HAPPairingHTTPCode } from "../lib/HAPServer";
-import { PairingInformation, PermissionTypes } from "../lib/model/AccessoryInfo";
-import { HAPEncryption, HAPUsername } from "../lib/util/eventedhttp";
-import * as hapCrypto from "../lib/util/hapCrypto";
-import * as tlv from "../lib/util/tlv";
+/* global NodeJS */
+import assert from 'node:assert'
+import { Buffer } from 'node:buffer'
+import { once } from 'node:events'
+import { createConnection, Socket } from 'node:net'
+
+import { HeaderObject, HTTPParser } from 'http-parser-js'
+import { expect } from 'vitest'
+
+import { HAPMimeTypes, PairingStates, PairMethods, TLVValues } from '../internal-types.js'
+import { HAPHTTPCode, HAPPairingHTTPCode } from '../lib/HAPServer.js'
+import { PairingInformation, PermissionTypes } from '../lib/model/AccessoryInfo.js'
+import { HAPEncryption, HAPUsername } from '../lib/util/eventedhttp.js'
+import * as hapCrypto from '../lib/util/hapCrypto.js'
+import * as tlv from '../lib/util/tlv.js'
 import {
   AccessoriesResponse,
   CharacteristicId,
@@ -16,31 +21,31 @@ import {
   CharacteristicsWriteResponse,
   PrepareWriteRequest,
   ResourceRequest,
-} from "../types";
-import { HAPHTTPError } from "./HAPHTTPError";
-import { TLVError } from "./tlvError";
+} from '../types.js'
+import { HAPHTTPError } from './HAPHTTPError.js'
+import { TLVError } from './tlvError.js'
 
 export interface HTTPResponse<T = Buffer> {
-  shouldKeepAlive: boolean;
-  upgrade: boolean;
-  statusCode: number;
-  statusMessage: string;
-  versionMajor: number;
-  versionMinor: number;
-  headers: Record<string, string>;
-  body: T;
-  trailers: string[];
+  shouldKeepAlive: boolean
+  upgrade: boolean
+  statusCode: number
+  statusMessage: string
+  versionMajor: number
+  versionMinor: number
+  headers: Record<string, string>
+  body: T
+  trailers: string[]
 }
 
 export interface HTTPRequestOptions {
   /**
    * Content-Type header applied when a request body is present. Defaults to "application/json".
    */
-  contentType?: string;
+  contentType?: string
   /**
    * Additional request headers appended verbatim to the fixed header block (e.g. an authorization header).
    */
-  headers?: Record<string, string>;
+  headers?: Record<string, string>
 }
 
 /**
@@ -56,28 +61,28 @@ export class HAPHTTPClient {
    * round-trip so it never trips on a healthy connection, while still turning a genuinely absent response into a loud
    * timeout instead of a silent empty buffer.
    */
-  private static readonly RECEIVE_TIMEOUT = 2000;
+  private static readonly RECEIVE_TIMEOUT = 2000
 
-  private readonly address: string;
-  private readonly port: number;
+  private readonly address: string
+  private readonly port: number
 
-  private currentSocket?: Socket;
-  private encryption?: HAPEncryption;
-  private socketClosed = false;
+  private currentSocket?: Socket
+  private encryption?: HAPEncryption
+  private socketClosed = false
   // Settles when the underlying socket has fully closed. Captured at connect() so close observation stays valid for the
   // client's entire lifetime, even after destroy() has dropped the socket reference.
-  private socketClosePromise?: Promise<void>;
-  private everConnected = false;
+  private socketClosePromise?: Promise<void>
+  private everConnected = false
 
-  private currentDataListener?: (data: Buffer) => void;
-  private dataQueue: Buffer[] = [];
+  private currentDataListener?: (data: Buffer) => void
+  private dataQueue: Buffer[] = []
   // Already-decrypted bytes trailing a parsed HTTP response that shared a TCP segment with subsequent data (e.g. a
   // coalesced EVENT message). Consumed by popReceiveBuffer before any further (still encrypted) segments.
-  private leftoverPlaintext?: Buffer;
+  private leftoverPlaintext?: Buffer
 
   constructor(address: string, port: number) {
-    this.address = address;
-    this.port = port;
+    this.address = address
+    this.port = port
   }
 
   /**
@@ -88,30 +93,30 @@ export class HAPHTTPClient {
     // One client instance models one connection for its entire lifetime - the client-side mirror of the server's
     // per-connection HAPConnection - so a client is never reconnected after use. A test needing a fresh connection
     // constructs a fresh client, which also keeps all receive state trivially clean.
-    expect(this.everConnected).toBe(false);
-    this.everConnected = true;
+    expect(this.everConnected).toBe(false)
+    this.everConnected = true
 
-    const socket = createConnection(this.port, this.address);
-    socket.setNoDelay(true);
+    const socket = createConnection(this.port, this.address)
+    socket.setNoDelay(true)
 
     // A permanent error listener must exist for the socket's lifetime: without one, a late ECONNRESET (e.g. the server
     // tearing down first in afterEach) would crash the process. Failures surface loudly through receive timeouts instead.
-    socket.on("error", () => {});
-    this.socketClosePromise = new Promise(resolve => {
-      socket.once("close", () => {
-        this.socketClosed = true;
-        resolve();
-      });
-    });
+    socket.on('error', () => {})
+    this.socketClosePromise = new Promise((resolve) => {
+      socket.once('close', () => {
+        this.socketClosed = true
+        resolve()
+      })
+    })
 
-    this.currentDataListener = data => {
-      this.dataQueue.push(data);
-    };
-    socket.on("data", this.currentDataListener);
-    this.currentSocket = socket;
+    this.currentDataListener = (data) => {
+      this.dataQueue.push(data)
+    }
+    socket.on('data', this.currentDataListener)
+    this.currentSocket = socket
 
     // once() rejects on a socket "error" while waiting, covering the failed-connect path.
-    await once(socket, "connect");
+    await once(socket, 'connect')
   }
 
   /**
@@ -121,11 +126,11 @@ export class HAPHTTPClient {
   destroy(): void {
     if (this.currentSocket) {
       if (this.currentDataListener) {
-        this.currentSocket.removeListener("data", this.currentDataListener);
-        this.currentDataListener = undefined;
+        this.currentSocket.removeListener('data', this.currentDataListener)
+        this.currentDataListener = undefined
       }
-      this.currentSocket.destroy();
-      this.currentSocket = undefined;
+      this.currentSocket.destroy()
+      this.currentSocket = undefined
     }
   }
 
@@ -134,7 +139,7 @@ export class HAPHTTPClient {
    * server-initiated teardown directly on the connection instead of inferring it from client-library internals.
    */
   get isClosed(): boolean {
-    return this.socketClosed;
+    return this.socketClosed
   }
 
   /**
@@ -143,46 +148,46 @@ export class HAPHTTPClient {
    * lifetime - including immediately after {@link destroy} - regardless of which side initiates the teardown.
    */
   async waitForClose(timeoutMs = HAPHTTPClient.RECEIVE_TIMEOUT): Promise<void> {
-    expect(this.socketClosePromise).toBeDefined();
+    expect(this.socketClosePromise).toBeDefined()
 
-    let timeoutId: NodeJS.Timeout | undefined = undefined;
+    let timeoutId: NodeJS.Timeout | undefined
 
     const timeout = new Promise<void>((_resolve, reject) => {
-      timeoutId = setTimeout(() => reject(new Error("Timed out awaiting the connection to close.")), timeoutMs);
-    });
+      timeoutId = setTimeout(() => reject(new Error('Timed out awaiting the connection to close.')), timeoutMs)
+    })
 
     try {
-      await Promise.race([this.socketClosePromise, timeout]);
+      await Promise.race([this.socketClosePromise, timeout])
     } finally {
-      clearTimeout(timeoutId);
+      clearTimeout(timeoutId)
     }
   }
 
   get receiveBufferCount(): number {
-    return this.dataQueue.length + (this.leftoverPlaintext ? 1 : 0);
+    return this.dataQueue.length + (this.leftoverPlaintext ? 1 : 0)
   }
 
   enableEncryption(encryption: HAPEncryption): void {
-    this.encryption = encryption;
+    this.encryption = encryption
   }
 
   disableEncryption(): void {
-    this.encryption = undefined;
+    this.encryption = undefined
   }
 
   popReceiveBuffer(): Buffer {
-    expect(this.currentSocket).toBeDefined();
+    expect(this.currentSocket).toBeDefined()
     if (this.leftoverPlaintext) {
-      const buffer = this.leftoverPlaintext;
-      this.leftoverPlaintext = undefined;
-      return buffer;
+      const buffer = this.leftoverPlaintext
+      this.leftoverPlaintext = undefined
+      return buffer
     }
-    expect(this.dataQueue.length > 0).toBeTruthy();
-    const buffer = this.dataQueue.splice(0, 1)[0];
+    expect(this.dataQueue.length > 0).toBeTruthy()
+    const buffer = this.dataQueue.splice(0, 1)[0]
     if (this.encryption) {
-      return hapCrypto.layerDecrypt(buffer, this.encryption);
+      return hapCrypto.layerDecrypt(buffer, this.encryption)
     }
-    return buffer;
+    return buffer
   }
 
   /**
@@ -191,49 +196,49 @@ export class HAPHTTPClient {
    * stalling out the timeout and obscuring the real cause.
    */
   private awaitIncomingData(deadline: number): Promise<void> {
-    expect(this.currentSocket).toBeDefined();
+    expect(this.currentSocket).toBeDefined()
 
     // A connection that has already closed can never deliver the awaited bytes - reject immediately rather than riding
     // out the deadline only to fail with the less specific timeout error.
     if (this.socketClosed) {
-      return Promise.reject(new Error("Connection closed while awaiting incoming data."));
+      return Promise.reject(new Error('Connection closed while awaiting incoming data.'))
     }
 
-    const socket = this.currentSocket!;
+    const socket = this.currentSocket!
 
     return new Promise((resolve, reject) => {
-      let settled = false;
+      let settled = false
 
-      const cleanups: (() => void)[] = [];
+      const cleanups: (() => void)[] = []
 
       // Whichever of the three outcomes settles first tears down the other two registrations, so no timer or listener
       // outlives the wait.
       const settle = (error?: Error) => {
         if (settled) {
-          return;
+          return
         }
-        settled = true;
+        settled = true
         for (const cleanup of cleanups) {
-          cleanup();
+          cleanup()
         }
         if (error) {
-          reject(error);
+          reject(error)
         } else {
-          resolve();
+          resolve()
         }
-      };
+      }
 
-      const timeoutId = setTimeout(() => settle(new Error("Timed out awaiting incoming data on the connection.")), Math.max(0, deadline - Date.now()));
-      const onData = () => settle();
-      const onClose = () => settle(new Error("Connection closed while awaiting incoming data."));
+      const timeoutId = setTimeout(() => settle(new Error('Timed out awaiting incoming data on the connection.')), Math.max(0, deadline - Date.now()))
+      const onData = () => settle()
+      const onClose = () => settle(new Error('Connection closed while awaiting incoming data.'))
 
-      cleanups.push(() => clearTimeout(timeoutId));
-      cleanups.push(() => socket.removeListener("data", onData));
-      cleanups.push(() => socket.removeListener("close", onClose));
+      cleanups.push(() => clearTimeout(timeoutId))
+      cleanups.push(() => socket.removeListener('data', onData))
+      cleanups.push(() => socket.removeListener('close', onClose))
 
-      socket.on("data", onData);
-      socket.on("close", onClose);
-    });
+      socket.on('data', onData)
+      socket.on('close', onClose)
+    })
   }
 
   /**
@@ -244,10 +249,10 @@ export class HAPHTTPClient {
    * a genuinely missing response fail loudly instead of silently reading an empty buffer.
    */
   async waitForData(count = 1, timeoutMs = HAPHTTPClient.RECEIVE_TIMEOUT): Promise<void> {
-    const deadline = Date.now() + timeoutMs;
+    const deadline = Date.now() + timeoutMs
 
     while (this.receiveBufferCount < count) {
-      await this.awaitIncomingData(deadline);
+      await this.awaitIncomingData(deadline)
     }
   }
 
@@ -259,68 +264,70 @@ export class HAPHTTPClient {
    * nondeterminism.
    */
   async readUntil(marker: string, timeoutMs = HAPHTTPClient.RECEIVE_TIMEOUT): Promise<string> {
-    const deadline = Date.now() + timeoutMs;
+    const deadline = Date.now() + timeoutMs
 
-    let received = "";
+    let received = ''
     while (this.receiveBufferCount > 0) {
-      received += this.popReceiveBuffer().toString();
+      received += this.popReceiveBuffer().toString()
     }
     while (!received.includes(marker)) {
-      await this.awaitIncomingData(deadline);
+      await this.awaitIncomingData(deadline)
       while (this.receiveBufferCount > 0) {
-        received += this.popReceiveBuffer().toString();
+        received += this.popReceiveBuffer().toString()
       }
     }
-    return received;
+    return received
   }
 
   formatHTTPRequest(
-    method: "GET" | "POST" | "PUT" | "DELETE",
+    method: 'GET' | 'POST' | 'PUT' | 'DELETE',
     route: string,
     data?: Buffer,
     options: HTTPRequestOptions = {},
   ): Buffer {
-    const contentType = options.contentType ?? "application/json";
+    const contentType = options.contentType ?? 'application/json'
 
-    let extraHeaders = "";
+    let extraHeaders = ''
     for (const [name, value] of Object.entries(options.headers ?? {})) {
-      extraHeaders += name + ": " + value + "\r\n";
+      extraHeaders += `${name}: ${value}\r\n`
     }
 
     // A body-less non-GET request is legitimate (e.g. POST /identify) and carries an explicit zero Content-Length so the
     // server's parser can frame the message without ambiguity.
     const bodyHeaders = data
-      ? "Content-Type: " + contentType + "\r\n" + "Content-Length: " + data.length + "\r\n"
-      : (method === "GET" ? "" : "Content-Length: 0\r\n");
+      ? `Content-Type: ${contentType}\r\n` + `Content-Length: ${data.length}\r\n`
+      : (method === 'GET'
+          ? ''
+          : 'Content-Length: 0\r\n')
 
-    const buffer = Buffer.from(`${method} ${route} HTTP/1.1\r\n` +
-      "Accept: application/json, text/plain, */*\r\n" +
-      "User-Agent: test-util\r\n" +
-      "Host: " + this.address + ":" + this.port + "\r\n" +
-      "Connection: keep-alive\r\n" +
-      extraHeaders +
-      bodyHeaders +
-      "\r\n");
+    const buffer = Buffer.from(`${method} ${route} HTTP/1.1\r\n`
+      + 'Accept: application/json, text/plain, */*\r\n'
+      + 'User-Agent: test-util\r\n'
+      + `Host: ${this.address}:${this.port}\r\n`
+      + `Connection: keep-alive\r\n${
+        extraHeaders
+      }${bodyHeaders
+      }\r\n`)
 
     if (data) {
-      return Buffer.concat([buffer, data]);
+      return Buffer.concat([buffer, data])
     }
 
-    return buffer;
+    return buffer
   }
 
-  async writeHTTPRequest(method: "GET" | "POST" | "PUT" | "DELETE", route: string, data?: Buffer, options?: HTTPRequestOptions): Promise<HTTPResponse> {
-    const httpRequest = this.formatHTTPRequest(method, route, data, options);
-    this.write(httpRequest);
-    return this.readHTTPResponse();
+  async writeHTTPRequest(method: 'GET' | 'POST' | 'PUT' | 'DELETE', route: string, data?: Buffer, options?: HTTPRequestOptions): Promise<HTTPResponse> {
+    const httpRequest = this.formatHTTPRequest(method, route, data, options)
+    this.write(httpRequest)
+    return this.readHTTPResponse()
   }
 
   write(data: Buffer): void {
     if (this.encryption) {
-      data = hapCrypto.layerEncrypt(data, this.encryption);
+      data = hapCrypto.layerEncrypt(data, this.encryption)
     }
-    expect(this.currentSocket).toBeDefined();
-    this.currentSocket!.write(data);
+    expect(this.currentSocket).toBeDefined()
+    this.currentSocket!.write(data)
   }
 
   /**
@@ -331,80 +338,81 @@ export class HAPHTTPClient {
    * notification) are retained for the next read rather than lost.
    */
   async readHTTPResponse(timeoutMs = HAPHTTPClient.RECEIVE_TIMEOUT): Promise<HTTPResponse> {
-    const deadline = Date.now() + timeoutMs;
-    const parser = new HTTPParser(HTTPParser.RESPONSE);
+    const deadline = Date.now() + timeoutMs
+    const parser = new HTTPParser(HTTPParser.RESPONSE)
 
-    let complete = false;
+    let complete = false
     // The chunk-relative position at which the message completed. The parser does not stop at message end - it
     // reinitializes and keeps consuming trailing bytes as the start of a next message within the same execute() call -
     // so the boundary must be captured the moment kOnMessageComplete fires, and the callbacks below must go quiet once
     // the message of interest is complete so trailing bytes cannot corrupt the parsed result.
-    let completedAt = 0;
-    let shouldKeepAlive = false;
-    let upgrade = false;
-    let statusCode = 0;
-    let statusMessage = "";
-    let versionMajor = 0;
-    let versionMinor = 0;
-    let headers: HeaderObject = [];
-    let trailers: string[] = [];
-    const bodyChunks: Buffer[] = [];
+    let completedAt = 0
+    let shouldKeepAlive = false
+    let upgrade = false
+    let statusCode = 0
+    let statusMessage = ''
+    let versionMajor = 0
+    let versionMinor = 0
+    let headers: HeaderObject = []
+    let trailers: string[] = []
+    const bodyChunks: Buffer[] = []
 
-    parser[HTTPParser.kOnHeadersComplete] = info => {
+    parser[HTTPParser.kOnHeadersComplete] = (info) => {
       if (complete) {
-        return;
+        return
       }
-      shouldKeepAlive = info.shouldKeepAlive;
-      upgrade = info.upgrade;
-      statusCode = info.statusCode;
-      statusMessage = info.statusMessage;
-      versionMajor = info.versionMajor;
-      versionMinor = info.versionMinor;
-      headers = info.headers;
-    };
+      shouldKeepAlive = info.shouldKeepAlive
+      upgrade = info.upgrade
+      statusCode = info.statusCode
+      statusMessage = info.statusMessage
+      versionMajor = info.versionMajor
+      versionMinor = info.versionMinor
+      headers = info.headers
+    }
 
     parser[HTTPParser.kOnBody] = (chunk, offset, length) => {
       if (complete) {
-        return;
+        return
       }
-      bodyChunks.push(chunk.subarray(offset, offset + length));
-    };
+      bodyChunks.push(chunk.subarray(offset, offset + length))
+    }
 
     // that's the event for trailers!
-    parser[HTTPParser.kOnHeaders] = t => {
+    parser[HTTPParser.kOnHeaders] = (t) => {
       if (complete) {
-        return;
+        return
       }
-      trailers = t;
-    };
+      trailers = t
+    }
 
     parser[HTTPParser.kOnMessageComplete] = () => {
-      complete = true;
+      complete = true
       // The parser's chunk-relative read position at completion time is the exact message boundary. The property is
       // runtime state the type declarations do not surface, hence the narrow structural cast.
-      completedAt = (parser as unknown as { offset: number }).offset;
-    };
+      completedAt = (parser as unknown as { offset: number }).offset
+    }
 
+    // eslint-disable-next-line no-unmodified-loop-condition -- set by the parser callback above
     while (!complete) {
       if (this.receiveBufferCount === 0) {
-        await this.awaitIncomingData(deadline);
+        await this.awaitIncomingData(deadline)
       }
 
-      const chunk = this.popReceiveBuffer();
-      const result = parser.execute(chunk);
+      const chunk = this.popReceiveBuffer()
+      const result = parser.execute(chunk)
 
       if (complete) {
         // Bytes beyond the completed message belong to the next message (e.g. a coalesced EVENT notification): retain
         // them for the next read. A parse error the parser hit on those trailing bytes is not this response's concern.
         if (completedAt < chunk.length) {
-          this.leftoverPlaintext = chunk.subarray(completedAt);
+          this.leftoverPlaintext = chunk.subarray(completedAt)
         }
-      } else if (typeof result !== "number") {
-        throw new Error("Failed to parse HTTP response chunk: " + result.message);
+      } else if (typeof result !== 'number') {
+        throw new TypeError(`Failed to parse HTTP response chunk: ${result.message}`)
       }
     }
 
-    const body = Buffer.concat(bodyChunks);
+    const body = Buffer.concat(bodyChunks)
 
     return {
       shouldKeepAlive,
@@ -416,7 +424,7 @@ export class HAPHTTPClient {
       headers: this.headersArrayToObject(headers),
       body,
       trailers,
-    };
+    }
   }
 
   async sendAddPairingRequest(identifier: HAPUsername, publicKey: Buffer, permission: PermissionTypes): Promise<void> {
@@ -426,9 +434,9 @@ export class HAPHTTPClient {
       TLVValues.IDENTIFIER, identifier,
       TLVValues.PUBLIC_KEY, publicKey,
       TLVValues.PERMISSIONS, permission,
-    );
+    )
 
-    await this.sendPairingsRequest(requestTLV);
+    await this.sendPairingsRequest(requestTLV)
   }
 
   async sendRemovePairingRequest(identifier: HAPUsername): Promise<void> {
@@ -436,61 +444,61 @@ export class HAPHTTPClient {
       TLVValues.METHOD, PairMethods.REMOVE_PAIRING,
       TLVValues.STATE, PairingStates.M1,
       TLVValues.IDENTIFIER, identifier,
-    );
+    )
 
-    await this.sendPairingsRequest(requestTLV);
+    await this.sendPairingsRequest(requestTLV)
   }
 
   async sendListPairingsRequest(): Promise<PairingInformation[]> {
     const requestTLV = tlv.encode(
       TLVValues.METHOD, PairMethods.LIST_PAIRINGS,
       TLVValues.STATE, PairingStates.M1,
-    );
+    )
 
-    const responseBody = await this.sendPairingsRequest(requestTLV);
-    const tlvDataList = tlv.decodeList(responseBody.subarray(3), TLVValues.IDENTIFIER);
+    const responseBody = await this.sendPairingsRequest(requestTLV)
+    const tlvDataList = tlv.decodeList(responseBody.subarray(3), TLVValues.IDENTIFIER)
 
-    const result: PairingInformation[] = [];
+    const result: PairingInformation[] = []
 
     for (const element of tlvDataList) {
       result.push({
         username: element[TLVValues.IDENTIFIER].toString(),
         publicKey: element[TLVValues.PUBLIC_KEY],
         permission: element[TLVValues.PERMISSIONS].readUInt8(0),
-      });
+      })
     }
 
-    return result;
+    return result
   }
 
   private async sendPairingsRequest(requestTLV: Buffer): Promise<Buffer> {
-    const httpResponse = await this.writeHTTPRequest("POST", "/pairings", requestTLV, { contentType: HAPMimeTypes.PAIRING_TLV8 });
+    const httpResponse = await this.writeHTTPRequest('POST', '/pairings', requestTLV, { contentType: HAPMimeTypes.PAIRING_TLV8 })
 
     // `/pairings` errors are transported via the tlv8 record
-    expect(httpResponse.statusCode).toEqual(HAPPairingHTTPCode.OK);
-    expect(httpResponse.headers["Content-Type"]).toEqual(HAPMimeTypes.PAIRING_TLV8);
+    expect(httpResponse.statusCode).toEqual(HAPPairingHTTPCode.OK)
+    expect(httpResponse.headers['Content-Type']).toEqual(HAPMimeTypes.PAIRING_TLV8)
 
-    const tlvData = tlv.decode(httpResponse.body);
-    expect(tlvData[TLVValues.STATE].readUInt8(0)).toEqual(PairingStates.M2);
+    const tlvData = tlv.decode(httpResponse.body)
+    expect(tlvData[TLVValues.STATE].readUInt8(0)).toEqual(PairingStates.M2)
 
     if (tlvData[TLVValues.ERROR_CODE]) {
-      throw new TLVError(tlvData[TLVValues.ERROR_CODE].readUInt8(0));
+      throw new TLVError(tlvData[TLVValues.ERROR_CODE].readUInt8(0))
     }
 
     // we return the raw buffer because LIST_PAIRINGS has some custom decoding strategies!
-    return httpResponse.body;
+    return httpResponse.body
   }
 
   public async sendAccessoriesRequest(): Promise<AccessoriesResponse> {
-    const httpResponse = await this.writeHTTPRequest("GET", "/accessories");
-    expect(httpResponse.headers["Content-Type"]).toEqual(HAPMimeTypes.HAP_JSON);
-    const jsonBody = JSON.parse(httpResponse.body.toString());
+    const httpResponse = await this.writeHTTPRequest('GET', '/accessories')
+    expect(httpResponse.headers['Content-Type']).toEqual(HAPMimeTypes.HAP_JSON)
+    const jsonBody = JSON.parse(httpResponse.body.toString())
 
     if (httpResponse.statusCode !== HAPPairingHTTPCode.OK) {
-      throw new HAPHTTPError(httpResponse.statusCode, jsonBody.status);
+      throw new HAPHTTPError(httpResponse.statusCode, jsonBody.status)
     }
 
-    return jsonBody;
+    return jsonBody
   }
 
   public async sendCharacteristicRead(
@@ -500,91 +508,93 @@ export class HAPHTTPClient {
     includeType?: boolean,
     includeEvent?: boolean,
   ): Promise<HTTPResponse<CharacteristicsReadResponse>> {
-    assert(ids.length > 0);
-    let query = "?id=" + ids.map(id => id.aid + "." + id.iid).join(",");
+    assert(ids.length > 0)
+    let query = `?id=${ids.map(id => `${id.aid}.${id.iid}`).join(',')}`
 
     if (includeMeta) {
-      query += "&meta=" + (includeMeta ? "true" : "false");
+      query += `&meta=${includeMeta ? 'true' : 'false'}`
     }
     if (includePerms) {
-      query += "&perms=" + (includePerms ? "1" : "0");
+      query += `&perms=${includePerms ? '1' : '0'}`
     }
     if (includeType) {
-      query += "&type=" + (includeType ? "true" : "false");
+      query += `&type=${includeType ? 'true' : 'false'}`
     }
     if (includeEvent) {
-      query += "&ev=" + (includeEvent ? "1" : "0");
+      query += `&ev=${includeEvent ? '1' : '0'}`
     }
 
-    const httpResponse = await this.writeHTTPRequest("GET", "/characteristics" + query);
-    expect(httpResponse.headers["Content-Type"]).toEqual(HAPMimeTypes.HAP_JSON);
+    const httpResponse = await this.writeHTTPRequest('GET', `/characteristics${query}`)
+    expect(httpResponse.headers['Content-Type']).toEqual(HAPMimeTypes.HAP_JSON)
 
-    const body = JSON.parse(httpResponse.body.toString());
-    if (!httpResponse.statusCode.toString().startsWith("2")) {
-      throw new HAPHTTPError(httpResponse.statusCode, body.status);
+    const body = JSON.parse(httpResponse.body.toString())
+    if (!httpResponse.statusCode.toString().startsWith('2')) {
+      throw new HAPHTTPError(httpResponse.statusCode, body.status)
     }
 
     return {
       ...httpResponse,
-      body: body,
-    };
+      body,
+    }
   }
 
   public async sendCharacteristicWrite(writeRequest: CharacteristicsWriteRequest): Promise<HTTPResponse<CharacteristicsWriteResponse | undefined>> {
     const httpResponse = await this.writeHTTPRequest(
-      "PUT", "/characteristics", Buffer.from(JSON.stringify(writeRequest)), { contentType: HAPMimeTypes.HAP_JSON },
-    );
+      'PUT', '/characteristics', Buffer.from(JSON.stringify(writeRequest)), { contentType: HAPMimeTypes.HAP_JSON },
+    )
     if (httpResponse.statusCode !== HAPHTTPCode.NO_CONTENT) {
-      expect(httpResponse.headers["Content-Type"]).toEqual(HAPMimeTypes.HAP_JSON);
+      expect(httpResponse.headers['Content-Type']).toEqual(HAPMimeTypes.HAP_JSON)
     }
 
-    if (!httpResponse.statusCode.toString().startsWith("2")) {
-      const jsonBody = JSON.parse(httpResponse.body.toString());
-      throw new HAPHTTPError(httpResponse.statusCode, jsonBody.status);
+    if (!httpResponse.statusCode.toString().startsWith('2')) {
+      const jsonBody = JSON.parse(httpResponse.body.toString())
+      throw new HAPHTTPError(httpResponse.statusCode, jsonBody.status)
     }
 
     return {
       ...httpResponse,
-      body: httpResponse.body.length > 0 ? JSON.parse(httpResponse.body.toString()) : undefined,
-    };
+      body: httpResponse.body.length > 0
+        ? JSON.parse(httpResponse.body.toString())
+        : undefined,
+    }
   }
 
   public async sendPrepareWrite(prepareWrite: PrepareWriteRequest): Promise<void> {
     const httpResponse = await this.writeHTTPRequest(
-      "PUT", "/prepare", Buffer.from(JSON.stringify(prepareWrite)), { contentType: HAPMimeTypes.HAP_JSON },
-    );
-    expect(httpResponse.headers["Content-Type"]).toEqual(HAPMimeTypes.HAP_JSON);
+      'PUT', '/prepare', Buffer.from(JSON.stringify(prepareWrite)), { contentType: HAPMimeTypes.HAP_JSON },
+    )
+    expect(httpResponse.headers['Content-Type']).toEqual(HAPMimeTypes.HAP_JSON)
 
     if (httpResponse.statusCode !== HAPHTTPCode.OK) {
-      const jsonBody = JSON.parse(httpResponse.body.toString());
-      throw new HAPHTTPError(httpResponse.statusCode, jsonBody.status);
+      const jsonBody = JSON.parse(httpResponse.body.toString())
+      throw new HAPHTTPError(httpResponse.statusCode, jsonBody.status)
     }
   }
 
   public async sendResourceRequest(resourceRequest: ResourceRequest): Promise<Buffer> {
     const httpResponse = await this.writeHTTPRequest(
-      "POST", "/resource", Buffer.from(JSON.stringify(resourceRequest)), { contentType: HAPMimeTypes.HAP_JSON },
-    );
+      'POST', '/resource', Buffer.from(JSON.stringify(resourceRequest)), { contentType: HAPMimeTypes.HAP_JSON },
+    )
 
     if (httpResponse.statusCode !== HAPHTTPCode.OK) {
-      expect(httpResponse.headers["Content-Type"]).toEqual(HAPMimeTypes.HAP_JSON);
-      const jsonBody = JSON.parse(httpResponse.body.toString());
-      throw new HAPHTTPError(httpResponse.statusCode, jsonBody.status);
+      expect(httpResponse.headers['Content-Type']).toEqual(HAPMimeTypes.HAP_JSON)
+      const jsonBody = JSON.parse(httpResponse.body.toString())
+      throw new HAPHTTPError(httpResponse.statusCode, jsonBody.status)
     }
 
-    expect(httpResponse.headers["Content-Type"]).toEqual(HAPMimeTypes.IMAGE_JPEG);
-    return httpResponse.body;
+    expect(httpResponse.headers['Content-Type']).toEqual(HAPMimeTypes.IMAGE_JPEG)
+    return httpResponse.body
   }
 
   private headersArrayToObject(headers: HeaderObject): Record<string, string> {
-    expect(headers.length % 2).toBe(0);
+    expect(headers.length % 2).toBe(0)
 
-    const result: Record<string, string> = {};
+    const result: Record<string, string> = {}
 
     for (let i = 0; i < headers.length; i += 2) {
-      result[headers[i]] = headers[i+1];
+      result[headers[i]] = headers[i + 1]
     }
 
-    return result;
+    return result
   }
 }

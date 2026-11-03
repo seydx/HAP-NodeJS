@@ -1,38 +1,42 @@
-import { SRP, SrpClient } from "fast-srp-hap";
-import tweetnacl from "tweetnacl";
-import { HAPMimeTypes, PairingStates, PairMethods, TLVValues } from "../internal-types";
-import { HAPPairingHTTPCode } from "../lib/HAPServer";
-import * as hapCrypto from "../lib/util/hapCrypto";
-import { EncryptedData } from "../lib/util/hapCrypto";
-import * as tlv from "../lib/util/tlv";
-import { HAPHTTPClient, HTTPResponse } from "./HAPHTTPClient";
+import { Buffer } from 'node:buffer'
+
+import { SRP, SrpClient } from 'fast-srp-hap'
+import tweetnacl from 'tweetnacl'
+import { expect } from 'vitest'
+
+import { HAPMimeTypes, PairingStates, PairMethods, TLVValues } from '../internal-types.js'
+import { HAPPairingHTTPCode } from '../lib/HAPServer.js'
+import * as hapCrypto from '../lib/util/hapCrypto.js'
+import { EncryptedData } from '../lib/util/hapCrypto.js'
+import * as tlv from '../lib/util/tlv.js'
+import { HAPHTTPClient, HTTPResponse } from './HAPHTTPClient.js'
 
 export interface PairSetupM2 {
-  serverPublicKey: Buffer;
-  salt: Buffer;
+  serverPublicKey: Buffer
+  salt: Buffer
 }
 
 export interface PairSetupM3 {
-  srpClient: SrpClient;
+  srpClient: SrpClient
 }
 
 export interface PairSetupM4 {
-  sharedSecret: Buffer;
+  sharedSecret: Buffer
 }
 
 export interface PairSetupM5 {
-  sessionKey: Buffer;
-  encryptedData: EncryptedData;
+  sessionKey: Buffer
+  encryptedData: EncryptedData
 }
 
 export interface PairSetupM6 {
-  accessoryLTPK: Buffer,
-  accessoryIdentifier: string,
+  accessoryLTPK: Buffer
+  accessoryIdentifier: string
 }
 
 export interface PairSetupClientInfo {
-  username: string;
-  publicKey: Buffer;
+  username: string
+  publicKey: Buffer
   privateKey: Buffer
 }
 
@@ -42,195 +46,195 @@ export interface PairSetupClientInfo {
  * client's socket makes that continuity explicit and guaranteed.
  */
 export class PairSetupClient {
-  private readonly client: HAPHTTPClient;
+  private readonly client: HAPHTTPClient
 
   constructor(client: HAPHTTPClient) {
-    this.client = client;
+    this.client = client
   }
 
   async sendPairSetup(pincode: string, clientInfo: PairSetupClientInfo): Promise<PairSetupM6> {
     // This is the success-path orchestrator, so every hop must come back 200 OK - the TLV payload assertions in the
     // parse steps do not pin the HTTP status on their own.
-    const responseM1 = await this.sendM1();
-    expect(responseM1.statusCode).toBe(HAPPairingHTTPCode.OK);
+    const responseM1 = await this.sendM1()
+    expect(responseM1.statusCode).toBe(HAPPairingHTTPCode.OK)
 
-    const M2 = this.parseM2(responseM1.body);
+    const M2 = this.parseM2(responseM1.body)
 
-    const M3 = await this.prepareM3(M2, pincode);
-    const responseM3 = await this.sendM3(M3);
-    expect(responseM3.statusCode).toBe(HAPPairingHTTPCode.OK);
+    const M3 = await this.prepareM3(M2, pincode)
+    const responseM3 = await this.sendM3(M3)
+    expect(responseM3.statusCode).toBe(HAPPairingHTTPCode.OK)
 
-    const M4 = this.parseM4(responseM3.body, M3);
+    const M4 = this.parseM4(responseM3.body, M3)
 
-    const M5 = this.prepareM5(M4, clientInfo);
-    const responseM5 = await this.sendM5(M5);
-    expect(responseM5.statusCode).toBe(HAPPairingHTTPCode.OK);
+    const M5 = this.prepareM5(M4, clientInfo)
+    const responseM5 = await this.sendM5(M5)
+    expect(responseM5.statusCode).toBe(HAPPairingHTTPCode.OK)
 
-    return this.parseM6(responseM5.body, M4, M5);
+    return this.parseM6(responseM5.body, M4, M5)
   }
 
   sendM1(): Promise<HTTPResponse> {
     return this.client.writeHTTPRequest(
-      "POST",
-      "/pair-setup",
+      'POST',
+      '/pair-setup',
       tlv.encode(
         TLVValues.STATE, PairingStates.M1,
         TLVValues.METHOD, PairMethods.PAIR_SETUP,
       ),
       { contentType: HAPMimeTypes.PAIRING_TLV8 },
-    );
+    )
   }
 
   parseM2(m1Response: Buffer): PairSetupM2 {
-    const objectsM2 = tlv.decode(m1Response);
-    expect(objectsM2[TLVValues.ERROR_CODE]).toBeUndefined();
-    expect(objectsM2[TLVValues.STATE].readUInt8(0)).toEqual(PairingStates.M2);
+    const objectsM2 = tlv.decode(m1Response)
+    expect(objectsM2[TLVValues.ERROR_CODE]).toBeUndefined()
+    expect(objectsM2[TLVValues.STATE].readUInt8(0)).toEqual(PairingStates.M2)
 
     return {
       serverPublicKey: objectsM2[TLVValues.PUBLIC_KEY],
       salt: objectsM2[TLVValues.SALT],
-    };
+    }
   }
 
   async prepareM3(m2: PairSetupM2, pincode: string): Promise<PairSetupM3> {
-    const srpKey = await SRP.genKey(32);
-    const srpClient = new SrpClient(SRP.params.hap, m2.salt, Buffer.from("Pair-Setup"), Buffer.from(pincode), srpKey);
-    srpClient.setB(m2.serverPublicKey);
+    const srpKey = await SRP.genKey(32)
+    const srpClient = new SrpClient(SRP.params.hap, m2.salt, Buffer.from('Pair-Setup'), Buffer.from(pincode), srpKey)
+    srpClient.setB(m2.serverPublicKey)
 
     return {
       srpClient,
-    };
+    }
   }
 
   sendM3(m3: PairSetupM3): Promise<HTTPResponse> {
     return this.client.writeHTTPRequest(
-      "POST",
-      "/pair-setup",
+      'POST',
+      '/pair-setup',
       tlv.encode(
         TLVValues.STATE, PairingStates.M3,
         TLVValues.PUBLIC_KEY, m3.srpClient.computeA(),
         TLVValues.PASSWORD_PROOF, m3.srpClient.computeM1(),
       ),
       { contentType: HAPMimeTypes.PAIRING_TLV8 },
-    );
+    )
   }
 
   parseM4(m3Response: Buffer, m3: PairSetupM3): PairSetupM4 {
-    const objectsM4 = tlv.decode(m3Response);
-    expect(objectsM4[TLVValues.ERROR_CODE]).toBeUndefined();
-    expect(objectsM4[TLVValues.STATE].readUInt8(0)).toEqual(PairingStates.M4);
+    const objectsM4 = tlv.decode(m3Response)
+    expect(objectsM4[TLVValues.ERROR_CODE]).toBeUndefined()
+    expect(objectsM4[TLVValues.STATE].readUInt8(0)).toEqual(PairingStates.M4)
 
-    const serverProof = objectsM4[TLVValues.PASSWORD_PROOF];
-    const encryptedDataM4 = objectsM4[TLVValues.ENCRYPTED_DATA];
+    const serverProof = objectsM4[TLVValues.PASSWORD_PROOF]
+    const encryptedDataM4 = objectsM4[TLVValues.ENCRYPTED_DATA]
 
-    expect(() => m3.srpClient.checkM2(serverProof)).not.toThrow();
-    expect(encryptedDataM4).toBeUndefined(); // we don't do MFI challenges
+    expect(() => m3.srpClient.checkM2(serverProof)).not.toThrow()
+    expect(encryptedDataM4).toBeUndefined() // we don't do MFI challenges
 
     return {
       sharedSecret: m3.srpClient.computeK(),
-    };
+    }
   }
 
   prepareM5(m4: PairSetupM4, clientInfo: PairSetupClientInfo): PairSetupM5 {
     const iOSDeviceX = hapCrypto.HKDF(
-      "sha512",
-      Buffer.from("Pair-Setup-Controller-Sign-Salt"),
+      'sha512',
+      Buffer.from('Pair-Setup-Controller-Sign-Salt'),
       m4.sharedSecret,
-      Buffer.from("Pair-Setup-Controller-Sign-Info"),
+      Buffer.from('Pair-Setup-Controller-Sign-Info'),
       32,
-    );
+    )
 
     const iOSDeviceInfo = Buffer.concat([
       iOSDeviceX,
       Buffer.from(clientInfo.username),
       clientInfo.publicKey,
-    ]);
+    ])
 
-    const iOSDeviceSignature = tweetnacl.sign.detached(iOSDeviceInfo, clientInfo.privateKey);
+    const iOSDeviceSignature = tweetnacl.sign.detached(iOSDeviceInfo, clientInfo.privateKey)
 
     const subTLV_M5 = tlv.encode(
       TLVValues.IDENTIFIER, clientInfo.username,
       TLVValues.PUBLIC_KEY, clientInfo.publicKey,
       TLVValues.SIGNATURE, iOSDeviceSignature,
-    );
+    )
 
     const sessionKey = hapCrypto.HKDF(
-      "sha512",
-      Buffer.from("Pair-Setup-Encrypt-Salt"),
+      'sha512',
+      Buffer.from('Pair-Setup-Encrypt-Salt'),
       m4.sharedSecret,
-      Buffer.from("Pair-Setup-Encrypt-Info"),
+      Buffer.from('Pair-Setup-Encrypt-Info'),
       32,
-    );
+    )
 
-    const encrypted = hapCrypto.chacha20_poly1305_encryptAndSeal(sessionKey, Buffer.from("PS-Msg05"), null, subTLV_M5);
+    const encrypted = hapCrypto.chacha20_poly1305_encryptAndSeal(sessionKey, Buffer.from('PS-Msg05'), null, subTLV_M5)
 
     return {
       sessionKey,
       encryptedData: encrypted,
-    };
+    }
   }
 
   sendM5(m5: PairSetupM5): Promise<HTTPResponse> {
     return this.client.writeHTTPRequest(
-      "POST",
-      "/pair-setup",
+      'POST',
+      '/pair-setup',
       tlv.encode(
         TLVValues.STATE, PairingStates.M5,
         TLVValues.ENCRYPTED_DATA, Buffer.concat([m5.encryptedData.ciphertext, m5.encryptedData.authTag]),
       ),
       { contentType: HAPMimeTypes.PAIRING_TLV8 },
-    );
+    )
   }
 
   parseM6(responseM5: Buffer, m4: PairSetupM4, m5: PairSetupM5): PairSetupM6 {
-    const objectsM6 = tlv.decode(responseM5);
-    expect(objectsM6[TLVValues.ERROR_CODE]).toBeUndefined();
-    expect(objectsM6[TLVValues.STATE].readUInt8(0)).toEqual(PairingStates.M6);
+    const objectsM6 = tlv.decode(responseM5)
+    expect(objectsM6[TLVValues.ERROR_CODE]).toBeUndefined()
+    expect(objectsM6[TLVValues.STATE].readUInt8(0)).toEqual(PairingStates.M6)
 
     // step 1 & 2
-    const encryptedDataTagM6 = objectsM6[TLVValues.ENCRYPTED_DATA];
-    const encryptedDataM6 = encryptedDataTagM6.subarray(0, -16);
-    const authTagM6 = encryptedDataTagM6.subarray(-16);
+    const encryptedDataTagM6 = objectsM6[TLVValues.ENCRYPTED_DATA]
+    const encryptedDataM6 = encryptedDataTagM6.subarray(0, -16)
+    const authTagM6 = encryptedDataTagM6.subarray(-16)
 
-    let plaintextM6: Buffer;
+    let plaintextM6: Buffer
     expect(() => {
       const result = hapCrypto.chacha20_poly1305_decryptAndVerify(
         m5.sessionKey,
-        Buffer.from("PS-Msg06"),
+        Buffer.from('PS-Msg06'),
         null,
         encryptedDataM6,
         authTagM6,
-      );
-      plaintextM6 = Buffer.from(result);
-    }).not.toThrow();
+      )
+      plaintextM6 = Buffer.from(result)
+    }).not.toThrow()
 
-    const subTLV_M6 = tlv.decode(plaintextM6!);
-    const accessoryIdentifier = subTLV_M6[TLVValues.IDENTIFIER];
-    const accessoryLTPK = subTLV_M6[TLVValues.PUBLIC_KEY];
-    const accessorySignature = subTLV_M6[TLVValues.SIGNATURE];
+    const subTLV_M6 = tlv.decode(plaintextM6!)
+    const accessoryIdentifier = subTLV_M6[TLVValues.IDENTIFIER]
+    const accessoryLTPK = subTLV_M6[TLVValues.PUBLIC_KEY]
+    const accessorySignature = subTLV_M6[TLVValues.SIGNATURE]
 
     // step 3
     const accessoryX = hapCrypto.HKDF(
-      "sha512",
-      Buffer.from("Pair-Setup-Accessory-Sign-Salt"),
+      'sha512',
+      Buffer.from('Pair-Setup-Accessory-Sign-Salt'),
       m4.sharedSecret,
-      Buffer.from("Pair-Setup-Accessory-Sign-Info"),
+      Buffer.from('Pair-Setup-Accessory-Sign-Info'),
       32,
-    );
+    )
 
     const accessoryInfo = Buffer.concat([
       accessoryX,
       accessoryIdentifier,
       accessoryLTPK,
-    ]);
+    ])
 
     expect(
       tweetnacl.sign.detached.verify(accessoryInfo, accessorySignature, accessoryLTPK),
-    ).toEqual(true);
+    ).toEqual(true)
 
     return {
       accessoryLTPK,
       accessoryIdentifier: accessoryIdentifier.toString(),
-    };
+    }
   }
 }

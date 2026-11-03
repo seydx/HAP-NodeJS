@@ -3,16 +3,16 @@
  *
  * @group Utils
  */
-// eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
+// eslint-disable-next-line ts/no-unsafe-function-type
 export function once<T extends Function>(func: T): T {
-  let called = false;
+  let called = false
 
   return ((...args: unknown[]) => {
     if (called) {
-      throw new Error("This callback function has already been called by someone else; it can only be called one time.");
+      throw new Error('This callback function has already been called by someone else; it can only be called one time.')
     } else {
-      called = true;
-      return func(...args);
+      called = true
+      return func(...args)
     }
-  }) as unknown as T;
+  }) as unknown as T
 }

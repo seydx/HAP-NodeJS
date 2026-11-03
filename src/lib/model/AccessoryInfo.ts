@@ -1,25 +1,33 @@
-import assert from "assert";
-import crypto from "crypto";
-import createDebug from "debug";
-import tweetnacl from "tweetnacl";
-import util from "util";
-import { AccessoryJsonObject, CharacteristicJsonObject, MacAddress, ServiceJsonObject } from "../../types";
-import { Categories } from "../Accessory";
-import { EventedHTTPServer, HAPConnection, HAPUsername } from "../util/eventedhttp";
-import { HAPStorage } from "./HAPStorage";
+import assert from 'node:assert'
+import { Buffer } from 'node:buffer'
+import crypto from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import util from 'node:util'
 
-const debug = createDebug("HAP-NodeJS:AccessoryInfo");
+import createDebug from 'debug'
+
+import { AccessoryJsonObject, CharacteristicJsonObject, MacAddress, ServiceJsonObject } from '../../types.js'
+import { Categories } from '../Accessory.js'
+import { EventedHTTPServer, HAPConnection, HAPUsername } from '../util/eventedhttp.js'
+import { generateEd25519KeyPair } from '../util/hapCrypto.js'
+import { HAPStorage } from './HAPStorage.js'
+
+const debug = createDebug('HAP-NodeJS:AccessoryInfo')
 
 function getVersion(): string {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const packageJson = require("../../../package.json");
-  const { version } = packageJson;
-  return version;
+  // bundled as CommonJS, import.meta.url is empty there
+  const packageJson = import.meta.url
+    ? JSON.parse(readFileSync(new URL('../../../package.json', import.meta.url), 'utf-8'))
+    // eslint-disable-next-line ts/no-require-imports
+    : require('../../../package.json')
+  const { version } = packageJson
+  return version
 }
 
 /**
  * @group Model
  */
+// eslint-disable-next-line no-restricted-syntax
 export const enum PermissionTypes {
   // noinspection JSUnusedGlobalSymbols
   USER = 0x00,
@@ -30,9 +38,9 @@ export const enum PermissionTypes {
  * @group Model
  */
 export interface PairingInformation {
-  username: HAPUsername,
-  publicKey: Buffer,
-  permission: PermissionTypes,
+  username: HAPUsername
+  publicKey: Buffer
+  permission: PermissionTypes
 }
 
 /**
@@ -41,36 +49,35 @@ export interface PairingInformation {
  * @group Model
  */
 export class AccessoryInfo {
+  static readonly deviceIdPattern: RegExp = /^([0-9A-F]{2}[:-]){5}([0-9A-F]{2})$/i
 
-  static readonly deviceIdPattern: RegExp = /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/;
-
-  username: MacAddress;
-  displayName: string;
-  model: string; // this property is currently not saved to disk
-  category: Categories;
-  pincode: string;
-  signSk: Buffer;
-  signPk: Buffer;
-  pairedClients: Record<HAPUsername, PairingInformation>;
-  pairedAdminClients: number;
-  private configVersion = 1;
-  private configHash: string;
-  setupID: string;
-  private lastFirmwareVersion = "";
+  username: MacAddress
+  displayName: string
+  model: string // this property is currently not saved to disk
+  category: Categories
+  pincode: string
+  signSk: Buffer
+  signPk: Buffer
+  pairedClients: Record<HAPUsername, PairingInformation>
+  pairedAdminClients: number
+  private configVersion = 1
+  private configHash: string
+  setupID: string
+  private lastFirmwareVersion = ''
 
   private constructor(username: MacAddress) {
-    this.username = username;
-    this.displayName = "";
-    this.model = "";
-    this.category = Categories.OTHER;
-    this.pincode = "";
-    this.signSk = Buffer.alloc(0);
-    this.signPk = Buffer.alloc(0);
-    this.pairedClients = {};
-    this.pairedAdminClients = 0;
-    this.configHash = "";
+    this.username = username
+    this.displayName = ''
+    this.model = ''
+    this.category = Categories.OTHER
+    this.pincode = ''
+    this.signSk = Buffer.alloc(0)
+    this.signPk = Buffer.alloc(0)
+    this.pairedClients = {}
+    this.pairedAdminClients = 0
+    this.configHash = ''
 
-    this.setupID = "";
+    this.setupID = ''
   }
 
   /**
@@ -81,39 +88,39 @@ export class AccessoryInfo {
    */
   public addPairedClient(username: HAPUsername, publicKey: Buffer, permission: PermissionTypes): void {
     this.pairedClients[username] = {
-      username: username,
-      publicKey: publicKey,
-      permission: permission,
-    };
+      username,
+      publicKey,
+      permission,
+    }
 
     if (permission === PermissionTypes.ADMIN) {
-      this.pairedAdminClients++;
+      this.pairedAdminClients++
     }
   }
 
   public updatePermission(username: HAPUsername, permission: PermissionTypes): void {
-    const pairingInformation = this.pairedClients[username];
+    const pairingInformation = this.pairedClients[username]
 
     if (pairingInformation) {
-      const oldPermission = pairingInformation.permission;
-      pairingInformation.permission = permission;
+      const oldPermission = pairingInformation.permission
+      pairingInformation.permission = permission
 
       if (oldPermission === PermissionTypes.ADMIN && permission !== PermissionTypes.ADMIN) {
-        this.pairedAdminClients--;
+        this.pairedAdminClients--
       } else if (oldPermission !== PermissionTypes.ADMIN && permission === PermissionTypes.ADMIN) {
-        this.pairedAdminClients++;
+        this.pairedAdminClients++
       }
     }
   }
 
   public listPairings(): PairingInformation[] {
-    const array: PairingInformation[] = [];
+    const array: PairingInformation[] = []
 
     for (const pairingInformation of Object.values(this.pairedClients)) {
-      array.push(pairingInformation);
+      array.push(pairingInformation)
     }
 
-    return array;
+    return array
   }
 
   /**
@@ -122,22 +129,22 @@ export class AccessoryInfo {
    * @param {string} username
    */
   public removePairedClient(connection: HAPConnection, username: HAPUsername): void {
-    this._removePairedClient0(connection, username);
+    this._removePairedClient0(connection, username)
 
     if (this.pairedAdminClients === 0) { // if we don't have any admin clients left paired it is required to kill all normal clients
       for (const username0 of Object.keys(this.pairedClients)) {
-        this._removePairedClient0(connection, username0);
+        this._removePairedClient0(connection, username0)
       }
     }
   }
 
   private _removePairedClient0(connection: HAPConnection, username: HAPUsername): void {
     if (this.pairedClients[username] && this.pairedClients[username].permission === PermissionTypes.ADMIN) {
-      this.pairedAdminClients--;
+      this.pairedAdminClients--
     }
-    delete this.pairedClients[username];
+    delete this.pairedClients[username]
 
-    EventedHTTPServer.destroyExistingConnectionsAfterUnpair(connection, username);
+    EventedHTTPServer.destroyExistingConnectionsAfterUnpair(connection, username)
   }
 
   /**
@@ -145,31 +152,31 @@ export class AccessoryInfo {
    * @param username
    */
   public isPaired(username: HAPUsername): boolean {
-    return !!this.pairedClients[username];
+    return !!this.pairedClients[username]
   }
 
   public hasAdminPermissions(username: HAPUsername): boolean {
     if (!username) {
-      return false;
+      return false
     }
-    const pairingInformation = this.pairedClients[username];
-    return !!pairingInformation && pairingInformation.permission === PermissionTypes.ADMIN;
+    const pairingInformation = this.pairedClients[username]
+    return !!pairingInformation && pairingInformation.permission === PermissionTypes.ADMIN
   }
 
   // Gets the public key for a paired client as a Buffer, or falsy value if not paired.
   public getClientPublicKey(username: HAPUsername): Buffer | undefined {
-    const pairingInformation = this.pairedClients[username];
+    const pairingInformation = this.pairedClients[username]
     if (pairingInformation) {
-      return pairingInformation.publicKey;
+      return pairingInformation.publicKey
     } else {
-      return undefined;
+      return undefined
     }
   }
 
   // Returns a boolean indicating whether this accessory has been paired with a client.
   paired = (): boolean => {
-    return Object.keys(this.pairedClients).length > 0; // if we have any paired clients, we're paired.
-  };
+    return Object.keys(this.pairedClients).length > 0 // if we have any paired clients, we're paired.
+  }
 
   /**
    * Checks based on the current accessory configuration if the current configuration number needs to be incremented.
@@ -180,45 +187,45 @@ export class AccessoryInfo {
    * @returns True if the current configuration number was incremented and thus a new TXT must be advertised.
    */
   public checkForCurrentConfigurationNumberIncrement(configuration: AccessoryJsonObject[], checkFirmwareIncrement?: boolean): boolean {
-    const shasum = crypto.createHash("sha1");
-    shasum.update(JSON.stringify(AccessoryInfo.canonicalizeConfiguration(configuration)));
-    const configHash = shasum.digest("hex");
+    const shasum = crypto.createHash('sha1')
+    shasum.update(JSON.stringify(AccessoryInfo.canonicalizeConfiguration(configuration)))
+    const configHash = shasum.digest('hex')
 
-    let changed = false;
+    let changed = false
 
     if (configHash !== this.configHash) {
-      const previousHash = this.configHash;
-      this.configVersion++;
-      this.configHash = configHash;
+      const previousHash = this.configHash
+      this.configVersion++
+      this.configHash = configHash
 
-      this.ensureConfigVersionBounds();
-      changed = true;
+      this.ensureConfigVersionBounds()
+      changed = true
 
       // the increment is otherwise invisible: a bridge whose configuration churns bumps c# (and re-advertises)
       // with no trace in any log, which is exactly what made homebridge/homebridge#3984 hard to diagnose
-      debug("[%s] Configuration number incremented to %d (configuration hash %s -> %s)",
-        this.username, this.configVersion, previousHash || "<none>", configHash);
+      debug('[%s] Configuration number incremented to %d (configuration hash %s -> %s)',
+        this.username, this.configVersion, previousHash || '<none>', configHash)
     }
 
     if (checkFirmwareIncrement) {
-      const version = getVersion();
+      const version = getVersion()
       if (this.lastFirmwareVersion !== version) {
         // we only check if it is different and not only if it is incremented
         // HomeKit spec prohibits firmware downgrades, but with hap-nodejs it's possible lol
-        this.lastFirmwareVersion = version;
-        changed = true;
+        this.lastFirmwareVersion = version
+        changed = true
       }
     }
 
     if (changed) {
-      this.save();
+      this.save()
     }
 
-    return changed;
+    return changed
   }
 
   public getConfigVersion(): number {
-    return this.configVersion;
+    return this.configVersion
   }
 
   /**
@@ -239,23 +246,23 @@ export class AccessoryInfo {
             characteristics: service.characteristics
               .map((characteristic): CharacteristicJsonObject => ({
                 ...characteristic,
-                perms: [...characteristic.perms].sort(),
-                "valid-values": characteristic["valid-values"] && [...characteristic["valid-values"]].sort((a, b) => a - b),
+                'perms': [...characteristic.perms].sort(),
+                'valid-values': characteristic['valid-values'] && [...characteristic['valid-values']].sort((a, b) => a - b),
               }))
               .sort((a, b) => a.iid - b.iid),
             linked: service.linked && [...service.linked].sort((a, b) => a - b),
           }))
           .sort((a, b) => a.iid - b.iid),
       }))
-      .sort((a, b) => a.aid - b.aid);
+      .sort((a, b) => a.aid - b.aid)
   }
 
   private ensureConfigVersionBounds(): void {
     // current configuration number must be in the range of 1-65535 and wrap to 1 when it overflows
 
-    this.configVersion = this.configVersion % (0xFFFF + 1);
+    this.configVersion = this.configVersion % (0xFFFF + 1)
     if (this.configVersion === 0) {
-      this.configVersion = 1;
+      this.configVersion = 1
     }
   }
 
@@ -264,8 +271,8 @@ export class AccessoryInfo {
       displayName: this.displayName,
       category: this.category,
       pincode: this.pincode,
-      signSk: this.signSk.toString("hex"),
-      signPk: this.signPk.toString("hex"),
+      signSk: this.signSk.toString('hex'),
+      signPk: this.signPk.toString('hex'),
       pairedClients: {},
       // moving permissions into an extra object, so there is nothing to migrate from old files.
       // if the legacy storage format should be upgraded some time, it would be reasonable to combine the storage
@@ -275,99 +282,98 @@ export class AccessoryInfo {
       configHash: this.configHash,
       setupID: this.setupID,
       lastFirmwareVersion: this.lastFirmwareVersion,
-    };
-
-    for (const [ username, pairingInformation ] of Object.entries(this.pairedClients)) {
-      // @ts-expect-error: missing typing, object instead of Record
-      saved.pairedClients[username] = pairingInformation.publicKey.toString("hex");
-      // @ts-expect-error: missing typing, object instead of Record
-      saved.pairedClientsPermission[username] = pairingInformation.permission;
     }
 
-    const key = AccessoryInfo.persistKey(this.username);
+    for (const [username, pairingInformation] of Object.entries(this.pairedClients)) {
+      // @ts-expect-error: missing typing, object instead of Record
+      saved.pairedClients[username] = pairingInformation.publicKey.toString('hex')
+      // @ts-expect-error: missing typing, object instead of Record
+      saved.pairedClientsPermission[username] = pairingInformation.permission
+    }
 
-    HAPStorage.storage().setItemSync(key, saved);
+    const key = AccessoryInfo.persistKey(this.username)
+
+    HAPStorage.storage().setItemSync(key, saved)
   }
 
   // Gets a key for storing this AccessoryInfo in the filesystem, like "AccessoryInfo.CC223DE3CEF3.json"
   static persistKey(username: MacAddress): string {
-    return util.format("AccessoryInfo.%s.json", username.replace(/:/g, "").toUpperCase());
+    return util.format('AccessoryInfo.%s.json', username.replace(/:/g, '').toUpperCase())
   }
 
   static create(username: MacAddress): AccessoryInfo {
-    AccessoryInfo.assertValidUsername(username);
-    const accessoryInfo = new AccessoryInfo(username);
+    AccessoryInfo.assertValidUsername(username)
+    const accessoryInfo = new AccessoryInfo(username)
 
-    accessoryInfo.lastFirmwareVersion = getVersion();
+    accessoryInfo.lastFirmwareVersion = getVersion()
 
     // Create a new unique key pair for this accessory.
-    const keyPair = tweetnacl.sign.keyPair();
+    const keyPair = generateEd25519KeyPair()
 
-    accessoryInfo.signSk = Buffer.from(keyPair.secretKey);
-    accessoryInfo.signPk = Buffer.from(keyPair.publicKey);
+    accessoryInfo.signSk = Buffer.from(keyPair.secretKey)
+    accessoryInfo.signPk = Buffer.from(keyPair.publicKey)
 
-    return accessoryInfo;
+    return accessoryInfo
   }
 
   static load(username: MacAddress): AccessoryInfo | null {
-    AccessoryInfo.assertValidUsername(username);
+    AccessoryInfo.assertValidUsername(username)
 
-    const key = AccessoryInfo.persistKey(username);
-    const saved = HAPStorage.storage().getItem(key);
+    const key = AccessoryInfo.persistKey(username)
+    const saved = HAPStorage.storage().getItem(key)
 
     if (saved) {
-      const info = new AccessoryInfo(username);
-      info.displayName = saved.displayName || "";
-      info.category = saved.category || Categories.OTHER;
-      info.pincode = saved.pincode || "";
-      info.signSk = Buffer.from(saved.signSk || "", "hex");
-      info.signPk = Buffer.from(saved.signPk || "", "hex");
+      const info = new AccessoryInfo(username)
+      info.displayName = saved.displayName || ''
+      info.category = saved.category || Categories.OTHER
+      info.pincode = saved.pincode || ''
+      info.signSk = Buffer.from(saved.signSk || '', 'hex')
+      info.signPk = Buffer.from(saved.signPk || '', 'hex')
 
-      info.pairedClients = {};
+      info.pairedClients = {}
       for (const username of Object.keys(saved.pairedClients || {})) {
-        const publicKey = saved.pairedClients[username];
-        let permission = saved.pairedClientsPermission? saved.pairedClientsPermission[username]: undefined;
+        const publicKey = saved.pairedClients[username]
+        let permission = saved.pairedClientsPermission ? saved.pairedClientsPermission[username] : undefined
         if (permission === undefined) {
-          permission = PermissionTypes.ADMIN;
+          permission = PermissionTypes.ADMIN
         } // defaulting to admin permissions is the only suitable solution, there is no way to recover permissions
 
         info.pairedClients[username] = {
-          username: username,
-          publicKey: Buffer.from(publicKey, "hex"),
-          permission: permission,
-        };
+          username,
+          publicKey: Buffer.from(publicKey, 'hex'),
+          permission,
+        }
         if (permission === PermissionTypes.ADMIN) {
-          info.pairedAdminClients++;
+          info.pairedAdminClients++
         }
       }
 
-      info.configVersion = saved.configVersion || 1;
-      info.configHash = saved.configHash || "";
+      info.configVersion = saved.configVersion || 1
+      info.configHash = saved.configHash || ''
 
-      info.setupID = saved.setupID || "";
+      info.setupID = saved.setupID || ''
 
-      info.lastFirmwareVersion = saved.lastFirmwareVersion || getVersion();
+      info.lastFirmwareVersion = saved.lastFirmwareVersion || getVersion()
 
-      info.ensureConfigVersionBounds();
+      info.ensureConfigVersionBounds()
 
-      return info;
+      return info
     } else {
-      return null;
+      return null
     }
   }
 
   static remove(username: MacAddress): void {
-    const key = AccessoryInfo.persistKey(username);
-    HAPStorage.storage().removeItemSync(key);
+    const key = AccessoryInfo.persistKey(username)
+    HAPStorage.storage().removeItemSync(key)
   }
 
   static assertValidUsername(username: MacAddress): void {
     assert.ok(AccessoryInfo.deviceIdPattern.test(username),
-      "The supplied username (" + username + ") is not valid " +
-        "(expected a format like 'XX:XX:XX:XX:XX:XX' with XX being a valid hexadecimal string). " +
-        "Note that, if you had this accessory already paired with the invalid username, you will need to repair " +
-        "the accessory and reconfigure your services in the Home app. " +
-        "Using an invalid username will lead to unexpected behaviour.");
+      `The supplied username (${username}) is not valid `
+      + '(expected a format like \'XX:XX:XX:XX:XX:XX\' with XX being a valid hexadecimal string). '
+      + 'Note that, if you had this accessory already paired with the invalid username, you will need to repair '
+      + 'the accessory and reconfigure your services in the Home app. '
+      + 'Using an invalid username will lead to unexpected behaviour.')
   }
 }
-

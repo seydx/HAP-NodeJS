@@ -1,967 +1,1066 @@
-import { CharacteristicWarningType } from "./Accessory";
+import { Buffer } from 'node:buffer'
+
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+import { CharacteristicWarningType } from './Accessory.js'
 import {
   Access,
   Characteristic,
   CharacteristicChange,
   CharacteristicEventTypes,
+  CharacteristicGetCallback,
   CharacteristicProps,
+  CharacteristicSetCallback,
+  describePerms,
   Formats,
+  isValidPerms,
   Perms,
   SerializedCharacteristic,
   Units,
-  describePerms,
-  isValidPerms,
-} from "./Characteristic";
-import { SelectedRTPStreamConfiguration } from "./definitions";
-import { HAPStatus } from "./HAPServer";
-import { HapStatusError } from "./util/hapStatusError";
-import * as uuid from "./util/uuid";
+} from './Characteristic.js'
+import { SelectedRTPStreamConfiguration } from './definitions/index.js'
+import { HAPStatus } from './HAPServer.js'
+import { HapStatusError } from './util/hapStatusError.js'
+import * as uuid from './util/uuid.js'
 
 function createCharacteristic(type: Formats, customUUID?: string): Characteristic {
-  return new Characteristic("Test", customUUID || uuid.generate("Foo"), { format: type, perms: [Perms.PAIRED_READ, Perms.PAIRED_WRITE] });
+  return new Characteristic('Test', customUUID || uuid.generate('Foo'), {
+    format: type,
+    perms: [Perms.PAIRED_READ, Perms.PAIRED_WRITE],
+  })
 }
 
 function createCharacteristicWithProps(props: CharacteristicProps, customUUID?: string): Characteristic {
-  return new Characteristic("Test", customUUID || uuid.generate("Foo"), props);
+  return new Characteristic('Test', customUUID || uuid.generate('Foo'), props)
 }
 
-describe("isValidPerms", () => {
-  it("accepts an array in which every entry is a permission", () => {
-    expect(isValidPerms([Perms.PAIRED_READ])).toBe(true);
+describe('isValidPerms', () => {
+  it('accepts an array in which every entry is a permission', () => {
+    expect(isValidPerms([Perms.PAIRED_READ])).toBe(true)
     expect(isValidPerms([
-      Perms.PAIRED_READ, Perms.PAIRED_WRITE, Perms.NOTIFY, Perms.ADDITIONAL_AUTHORIZATION, Perms.TIMED_WRITE, Perms.HIDDEN, Perms.WRITE_RESPONSE,
-    ])).toBe(true);
+      Perms.PAIRED_READ,
+      Perms.PAIRED_WRITE,
+      Perms.NOTIFY,
+      Perms.ADDITIONAL_AUTHORIZATION,
+      Perms.TIMED_WRITE,
+      Perms.HIDDEN,
+      Perms.WRITE_RESPONSE,
+    ])).toBe(true)
     // the EVENTS alias shares NOTIFY's wire value and is accepted through it
-    expect(isValidPerms([Perms.EVENTS])).toBe(true);
-  });
+    expect(isValidPerms([Perms.EVENTS])).toBe(true)
+  })
 
   it.each([
-    { label: "an empty array", value: [] },
-    { label: "a bare string", value: "pr" },
-    { label: "null", value: null },
-    { label: "undefined", value: undefined },
-    { label: "an array containing null", value: [null, Perms.NOTIFY] },
-    { label: "an array containing an unknown string", value: ["READ", Perms.NOTIFY] },
-    { label: "a nested array", value: [[Perms.PAIRED_READ]] },
-  ])("rejects $label", ({ value }) => {
-    expect(isValidPerms(value)).toBe(false);
-  });
+    { label: 'an empty array', value: [] },
+    { label: 'a bare string', value: 'pr' },
+    { label: 'null', value: null },
+    { label: 'undefined', value: undefined },
+    {
+      label: 'an array containing null',
+      value: [null, Perms.NOTIFY],
+    },
+    {
+      label: 'an array containing an unknown string',
+      value: ['READ', Perms.NOTIFY],
+    },
+    {
+      label: 'a nested array',
+      value: [
+        [Perms.PAIRED_READ],
+      ],
+    },
+  ])('rejects $label', ({ value }) => {
+    expect(isValidPerms(value)).toBe(false)
+  })
 
-  it("rejects a sparse array, whose holes would serialize to null", () => {
-    const sparse: (Perms | undefined)[] = [ Perms.PAIRED_READ, Perms.NOTIFY ];
+  it('rejects a sparse array, whose holes would serialize to null', () => {
+    const sparse: (Perms | undefined)[] = [Perms.PAIRED_READ, Perms.NOTIFY]
 
-    delete sparse[0];
+    delete sparse[0]
 
-    expect(isValidPerms(sparse)).toBe(false);
-  });
-});
+    expect(isValidPerms(sparse)).toBe(false)
+  })
+})
 
-describe("describePerms", () => {
-  it("renders any value without throwing", () => {
-    expect(describePerms([ Perms.PAIRED_READ, null ])).toBe("[\"pr\",null]");
-    expect(describePerms(undefined)).toBe("undefined");
+describe('describePerms', () => {
+  it('renders any value without throwing', () => {
+    expect(describePerms([Perms.PAIRED_READ, null])).toBe('["pr",null]')
+    expect(describePerms(undefined)).toBe('undefined')
 
-    const cyclic: unknown[] = [ Perms.NOTIFY ];
-    cyclic.push(cyclic);
+    const cyclic: unknown[] = [Perms.NOTIFY]
+    cyclic.push(cyclic)
 
-    expect(typeof describePerms(cyclic)).toBe("string");
-    expect(typeof describePerms([ 1n ])).toBe("string");
-  });
-});
+    expect(typeof describePerms(cyclic)).toBe('string')
+    expect(typeof describePerms([1n])).toBe('string')
+  })
+})
 
-describe("Characteristic", () => {
+describe('characteristic', () => {
   beforeEach(() => {
-    jest.resetAllMocks();
-  });
+    vi.resetAllMocks()
+  })
 
-  describe("#setProps()", () => {
-    it("should overwrite existing properties", () => {
-      const characteristic = createCharacteristic(Formats.BOOL);
+  describe('#setProps()', () => {
+    it('should overwrite existing properties', () => {
+      const characteristic = createCharacteristic(Formats.BOOL)
 
-      const NEW_PROPS = { format: Formats.STRING, perms: [Perms.NOTIFY] };
-      characteristic.setProps(NEW_PROPS);
+      const NEW_PROPS = {
+        format: Formats.STRING,
+        perms: [Perms.NOTIFY],
+      }
+      characteristic.setProps(NEW_PROPS)
 
-      expect(characteristic.props).toEqual(NEW_PROPS);
-    });
+      expect(characteristic.props).toEqual(NEW_PROPS)
+    })
 
     it.each([
-      { perms: [undefined, Perms.NOTIFY] },
-      { perms: [null, Perms.NOTIFY] },
-      { perms: [[Perms.PAIRED_READ], Perms.NOTIFY] },
-      { perms: ["invalid", Perms.NOTIFY] },
+      {
+        perms: [undefined, Perms.NOTIFY],
+      },
+      {
+        perms: [null, Perms.NOTIFY],
+      },
+      {
+        perms: [
+          [Perms.PAIRED_READ],
+          Perms.NOTIFY,
+        ],
+      },
+      {
+        perms: ['invalid', Perms.NOTIFY],
+      },
       { perms: [] },
-      { perms: "pr" },
-    ])("should warn about invalid permissions $perms and keep them", ({ perms }) => {
-      const characteristic = createCharacteristic(Formats.BOOL);
-      const warnings: { type: CharacteristicWarningType; message: string }[] = [];
+      { perms: 'pr' },
+    ])('should warn about invalid permissions $perms and keep them', ({ perms }) => {
+      const characteristic = createCharacteristic(Formats.BOOL)
+      const warnings: { type: CharacteristicWarningType, message: string }[] = []
       characteristic.on(CharacteristicEventTypes.CHARACTERISTIC_WARNING, (type, message) => {
-        warnings.push({ type, message });
-      });
+        warnings.push({ type, message })
+      })
 
       characteristic.setProps({
         perms: perms as unknown as Perms[],
-      });
+      })
 
-      expect(warnings).toHaveLength(1);
-      expect(warnings[0].type).toEqual(CharacteristicWarningType.ERROR_MESSAGE);
-      expect(warnings[0].message).toMatch(/contains invalid permissions/);
+      expect(warnings).toHaveLength(1)
+      expect(warnings[0].type).toEqual(CharacteristicWarningType.ERROR_MESSAGE)
+      expect(warnings[0].message).toMatch(/contains invalid permissions/)
       // An array the plugin declared is what the model carries, which is what the serving boundary quarantines the accessory over. A non-array
       // becomes an empty array instead, because everything downstream indexes, iterates and pushes into this - see the test below.
-      expect(characteristic.props.perms).toEqual(Array.isArray(perms) ? perms : []);
-    });
+      expect(characteristic.props.perms).toEqual(Array.isArray(perms)
+        ? perms
+        : [])
+    })
 
-    it("substitutes an empty array for a non-array permissions value, so the array consumers stay safe", () => {
-      const consoleWarnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
-      const characteristic = createCharacteristic(Formats.BOOL);
+    it('substitutes an empty array for a non-array permissions value, so the array consumers stay safe', () => {
+      const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const characteristic = createCharacteristic(Formats.BOOL)
 
       // A bare string is the dangerous shape: String.prototype.includes substring-matches, so `props.perms.includes(Perms.PAIRED_READ)`
       // would answer true and silently grant read access, while `props.perms.push(...)` would throw.
-      characteristic.setProps({ perms: Perms.PAIRED_READ as unknown as Perms[] });
+      characteristic.setProps({ perms: Perms.PAIRED_READ as unknown as Perms[] })
 
-      expect(Array.isArray(characteristic.props.perms)).toBe(true);
-      expect(characteristic.props.perms.includes(Perms.PAIRED_READ)).toBe(false);
+      expect(Array.isArray(characteristic.props.perms)).toBe(true)
+      expect(characteristic.props.perms.includes(Perms.PAIRED_READ)).toBe(false)
       // An empty array is still invalid, so the serving boundary quarantines the accessory rather than serving it with no permissions.
-      expect(isValidPerms(characteristic.props.perms)).toBe(false);
-      expect(() => characteristic.setupAdditionalAuthorization(() => true)).not.toThrow();
+      expect(isValidPerms(characteristic.props.perms)).toBe(false)
+      expect(() => characteristic.setupAdditionalAuthorization(() => true)).not.toThrow()
 
-      consoleWarnSpy.mockRestore();
-    });
+      consoleWarnSpy.mockRestore()
+    })
 
     // Characterisation, not a regression test: the set lookup already rejected these, and the explicit `typeof` check in isValidPerms exists so
     // VALID_PERMS can be typed ReadonlySet<string> without casting the unknown entry back to a string.
-    it("rejects a permissions entry that is not a string at all", () => {
-      expect(isValidPerms([Perms.NOTIFY, 1])).toBe(false);
-      expect(isValidPerms([Perms.NOTIFY, { toString: () => Perms.NOTIFY }])).toBe(false);
-    });
+    it('rejects a permissions entry that is not a string at all', () => {
+      expect(isValidPerms([Perms.NOTIFY, 1])).toBe(false)
+      expect(isValidPerms([
+        Perms.NOTIFY,
+        {
+          toString: () => Perms.NOTIFY,
+        },
+      ])).toBe(false)
+    })
 
-    it("warns through the console when nothing is subscribed to the characteristic", () => {
-      const consoleWarnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
-      const characteristic = createCharacteristic(Formats.BOOL);
+    it('warns through the console when nothing is subscribed to the characteristic', () => {
+      const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const characteristic = createCharacteristic(Formats.BOOL)
 
-      characteristic.setProps({ perms: [null, Perms.NOTIFY] as unknown as Perms[] });
+      characteristic.setProps({
+        perms: [null, Perms.NOTIFY] as unknown as Perms[],
+      })
 
-      expect(consoleWarnSpy).toHaveBeenCalledTimes(1);
-      expect(consoleWarnSpy.mock.calls[0][0]).toMatch(/^HAP-NodeJS WARNING: \[Test \(.*\)] characteristic contains invalid permissions/);
+      expect(consoleWarnSpy).toHaveBeenCalledTimes(1)
+      expect(consoleWarnSpy.mock.calls[0][0]).toMatch(/^HAP-NodeJS WARNING: \[Test \(.*\)\] characteristic contains invalid permissions/)
       // Nothing else will report this warning, and a characteristic with no service carries no accessory or service name, so the stack that the
       // event subscribers would have received has to reach the console too - it is the only thing that points at the line responsible.
-      expect(consoleWarnSpy.mock.calls[0][0]).toMatch(/\nThrown at: [\s\S]*\n\s+at /);
-      expect(characteristic.props.perms).toEqual([null, Perms.NOTIFY]);
+      expect(consoleWarnSpy.mock.calls[0][0]).toMatch(/\nThrown at: (?:[^\n]*\n\S)*[^\n]*\n\s+(?:\S(?:[^\n]*\n\S)*[^\n]*\n\s+)*at /)
+      expect(characteristic.props.perms).toEqual([null, Perms.NOTIFY])
 
-      consoleWarnSpy.mockRestore();
-    });
+      consoleWarnSpy.mockRestore()
+    })
 
-    it("keeps a characteristic's own value out of the console when nothing is subscribed", () => {
-      const consoleWarnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
-      const consoleErrorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    it('keeps a characteristic\'s own value out of the console when nothing is subscribed', () => {
+      const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
       // A value warning quotes the value that was rejected, and on something like PasswordSetting that value is the secret itself. The console
       // fallback exists for a malformed *declaration*, which never carries one, so a value warning on an unheard characteristic still goes nowhere.
       const characteristic = createCharacteristicWithProps({
         format: Formats.STRING,
         perms: [Perms.PAIRED_READ, Perms.PAIRED_WRITE],
         maxLen: 4,
-      });
+      })
 
-      characteristic.updateValue("hunter2-the-actual-password");
+      characteristic.updateValue('hunter2-the-actual-password')
 
       for (const spy of [consoleWarnSpy, consoleErrorSpy]) {
         for (const call of spy.mock.calls) {
-          expect(String(call[0])).not.toContain("hunter2-the-actual-password");
+          expect(String(call[0])).not.toContain('hunter2-the-actual-password')
         }
       }
-      expect(consoleWarnSpy).not.toHaveBeenCalled();
-      expect(consoleErrorSpy).not.toHaveBeenCalled();
+      expect(consoleWarnSpy).not.toHaveBeenCalled()
+      expect(consoleErrorSpy).not.toHaveBeenCalled()
 
-      consoleWarnSpy.mockRestore();
-      consoleErrorSpy.mockRestore();
-    });
+      consoleWarnSpy.mockRestore()
+      consoleErrorSpy.mockRestore()
+    })
 
-    it("warns about permissions whose diagnostic cannot be JSON-serialized", () => {
-      const consoleWarnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
-      const characteristic = createCharacteristic(Formats.BOOL);
-      const cyclic: unknown[] = [ Perms.NOTIFY ];
-      cyclic.push(cyclic);
+    it('warns about permissions whose diagnostic cannot be JSON-serialized', () => {
+      const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const characteristic = createCharacteristic(Formats.BOOL)
+      const cyclic: unknown[] = [Perms.NOTIFY]
+      cyclic.push(cyclic)
 
-      characteristic.setProps({ perms: cyclic as Perms[] });
-      characteristic.setProps({ perms: [ 1n ] as unknown as Perms[] });
+      characteristic.setProps({ perms: cyclic as Perms[] })
+      characteristic.setProps({
+        perms: [1n] as unknown as Perms[],
+      })
 
-      expect(consoleWarnSpy).toHaveBeenCalledTimes(2);
+      expect(consoleWarnSpy).toHaveBeenCalledTimes(2)
       for (const call of consoleWarnSpy.mock.calls) {
-        expect(typeof call[0]).toBe("string");
-        expect(call[0]).toMatch(/contains invalid permissions/);
+        expect(typeof call[0]).toBe('string')
+        expect(call[0]).toMatch(/contains invalid permissions/)
       }
-      expect(characteristic.props.perms).toEqual([ 1n ]);
+      expect(characteristic.props.perms).toEqual([1n])
 
-      consoleWarnSpy.mockRestore();
-    });
+      consoleWarnSpy.mockRestore()
+    })
 
-    it("should fail when setting invalid value range", () => {
-      const characteristic = createCharacteristic(Formats.INT);
+    it('should fail when setting invalid value range', () => {
+      const characteristic = createCharacteristic(Formats.INT)
 
       const setProps = (min: number, max: number) => characteristic.setProps({
         minValue: min,
         maxValue: max,
-      });
+      })
 
-      expect(() => setProps(-256, -512)).toThrow(Error);
-      expect(() => setProps(0, -3)).toThrow(Error);
-      expect(() => setProps(6, 0)).toThrow(Error);
-      expect(() => setProps(678, 234)).toThrow(Error);
+      expect(() => setProps(-256, -512)).toThrow(Error)
+      expect(() => setProps(0, -3)).toThrow(Error)
+      expect(() => setProps(6, 0)).toThrow(Error)
+      expect(() => setProps(678, 234)).toThrow(Error)
 
       // should allow setting equal values
-      setProps(0, 0);
-      setProps(3, 3);
-    });
+      setProps(0, 0)
+      setProps(3, 3)
+    })
 
-    it("should reject update to minValue and maxValue when they are out of range for format type", () => {
+    it('should reject update to minValue and maxValue when they are out of range for format type', () => {
       const characteristic = createCharacteristicWithProps({
         format: Formats.UINT8,
         perms: [Perms.NOTIFY, Perms.PAIRED_READ],
         minValue: 0,
         maxValue: 255,
-      });
+      })
 
-      // @ts-expect-error: spying on private property
-      const mock = jest.spyOn(characteristic, "characteristicWarning");
+      const mock = vi.spyOn(characteristic, 'characteristicWarning')
 
-      mock.mockReset();
+      mock.mockReset()
       characteristic.setProps({
         minValue: 700,
         maxValue: 1000,
-      });
+      })
 
-      expect(characteristic.props.minValue).toEqual(0); // min for UINT8
-      expect(characteristic.props.maxValue).toEqual(255); // max for UINT8
-      expect(mock).toHaveBeenCalledTimes(2);
+      expect(characteristic.props.minValue).toEqual(0) // min for UINT8
+      expect(characteristic.props.maxValue).toEqual(255) // max for UINT8
+      expect(mock).toHaveBeenCalledTimes(2)
 
-      mock.mockReset();
+      mock.mockReset()
       characteristic.setProps({
         minValue: -1000,
         maxValue: -500,
-      });
+      })
 
-      expect(characteristic.props.minValue).toEqual(0); // min for UINT8
-      expect(characteristic.props.maxValue).toEqual(255); // max for UINT8
-      expect(mock).toHaveBeenCalledTimes(2);
+      expect(characteristic.props.minValue).toEqual(0) // min for UINT8
+      expect(characteristic.props.maxValue).toEqual(255) // max for UINT8
+      expect(mock).toHaveBeenCalledTimes(2)
 
-      mock.mockReset();
+      mock.mockReset()
       characteristic.setProps({
         minValue: 10,
         maxValue: 1000,
-      });
+      })
 
-      expect(characteristic.props.minValue).toEqual(10);
-      expect(characteristic.props.maxValue).toEqual(255); // max for UINT8
-      expect(mock).toHaveBeenCalledTimes(1);
-    });
+      expect(characteristic.props.minValue).toEqual(10)
+      expect(characteristic.props.maxValue).toEqual(255) // max for UINT8
+      expect(mock).toHaveBeenCalledTimes(1)
+    })
 
-    it("should reject update to minValue and maxValue when minValue is greater than maxValue", () => {
+    it('should reject update to minValue and maxValue when minValue is greater than maxValue', () => {
       const characteristic = createCharacteristicWithProps({
         format: Formats.FLOAT,
         perms: [Perms.NOTIFY, Perms.PAIRED_READ],
-      });
+      })
 
       expect(() => {
         characteristic.setProps({
           minValue: 1000,
           maxValue: 500,
-        });
-      }).toThrow();
+        })
+      }).toThrow()
 
-      expect(characteristic.props.minValue).toBeUndefined();
-      expect(characteristic.props.maxValue).toBeUndefined();
-    });
+      expect(characteristic.props.minValue).toBeUndefined()
+      expect(characteristic.props.maxValue).toBeUndefined()
+    })
 
-    it("should accept update to minValue and maxValue when they are in range for format type", () => {
+    it('should accept update to minValue and maxValue when they are in range for format type', () => {
       const characteristic = createCharacteristicWithProps({
         format: Formats.INT,
         perms: [Perms.NOTIFY, Perms.PAIRED_READ],
         minValue: 0,
         maxValue: 255,
-      });
+      })
 
-      // @ts-expect-error: spying on private property
-      const mock = jest.spyOn(characteristic, "characteristicWarning");
+      const mock = vi.spyOn(characteristic, 'characteristicWarning')
 
-      mock.mockReset();
+      mock.mockReset()
       characteristic.setProps({
         minValue: 10,
         maxValue: 240,
-      });
+      })
 
-      expect(characteristic.props.minValue).toEqual(10);
-      expect(characteristic.props.maxValue).toEqual(240);
-      expect(mock).toHaveBeenCalledTimes(0);
+      expect(characteristic.props.minValue).toEqual(10)
+      expect(characteristic.props.maxValue).toEqual(240)
+      expect(mock).toHaveBeenCalledTimes(0)
 
-      mock.mockReset();
+      mock.mockReset()
       characteristic.setProps({
         minValue: -2147483648,
         maxValue: 2147483647,
-      });
+      })
 
-      expect(characteristic.props.minValue).toEqual(-2147483648);
-      expect(characteristic.props.maxValue).toEqual(2147483647);
-      expect(mock).toHaveBeenCalledTimes(0);
-    });
+      expect(characteristic.props.minValue).toEqual(-2147483648)
+      expect(characteristic.props.maxValue).toEqual(2147483647)
+      expect(mock).toHaveBeenCalledTimes(0)
+    })
 
-    it("should reject non-finite numbers for minValue and maxValue for numeric characteristics", () => {
+    it('should reject non-finite numbers for minValue and maxValue for numeric characteristics', () => {
       const characteristic = createCharacteristicWithProps({
         format: Formats.FLOAT,
         perms: [Perms.NOTIFY, Perms.PAIRED_READ],
-      });
+      })
 
-      // @ts-expect-error: spying on private property
-      const mock = jest.spyOn(characteristic, "characteristicWarning");
+      const mock = vi.spyOn(characteristic, 'characteristicWarning')
 
-      mock.mockReset();
+      mock.mockReset()
       characteristic.setProps({
         minValue: Number.NEGATIVE_INFINITY,
-      });
+      })
 
-      expect(characteristic.props.minValue).toEqual(undefined);
-      expect(mock).toHaveBeenCalledTimes(1);
-      expect(mock).toHaveBeenCalledWith(expect.stringContaining("Property 'minValue' must be a finite number"), expect.anything());
+      expect(characteristic.props.minValue).toEqual(undefined)
+      expect(mock).toHaveBeenCalledTimes(1)
+      expect(mock).toHaveBeenCalledWith(expect.stringContaining('Property \'minValue\' must be a finite number'), expect.anything())
 
-      mock.mockReset();
+      mock.mockReset()
       characteristic.setProps({
         maxValue: Number.POSITIVE_INFINITY,
-      });
+      })
 
-      expect(characteristic.props.maxValue).toEqual(undefined);
-      expect(mock).toHaveBeenCalledTimes(1);
-      expect(mock).toHaveBeenCalledWith(expect.stringContaining("Property 'maxValue' must be a finite number"), expect.anything());
-    });
+      expect(characteristic.props.maxValue).toEqual(undefined)
+      expect(mock).toHaveBeenCalledTimes(1)
+      expect(mock).toHaveBeenCalledWith(expect.stringContaining('Property \'maxValue\' must be a finite number'), expect.anything())
+    })
 
-    it("should reject NaN numbers for minValue and maxValue for numeric characteristics", () => {
+    it('should reject NaN numbers for minValue and maxValue for numeric characteristics', () => {
       const characteristic = createCharacteristicWithProps({
         format: Formats.FLOAT,
         perms: [Perms.NOTIFY, Perms.PAIRED_READ],
-      });
+      })
 
-      // @ts-expect-error: spying on private property
-      const mock = jest.spyOn(characteristic, "characteristicWarning");
+      const mock = vi.spyOn(characteristic, 'characteristicWarning')
 
-      mock.mockReset();
+      mock.mockReset()
       characteristic.setProps({
         minValue: NaN,
-      });
+      })
 
-      expect(characteristic.props.minValue).toEqual(undefined);
-      expect(mock).toHaveBeenCalledTimes(1);
-      expect(mock).toHaveBeenCalledWith(expect.stringContaining("Property 'minValue' must be a finite number"), expect.anything());
+      expect(characteristic.props.minValue).toEqual(undefined)
+      expect(mock).toHaveBeenCalledTimes(1)
+      expect(mock).toHaveBeenCalledWith(expect.stringContaining('Property \'minValue\' must be a finite number'), expect.anything())
 
-      mock.mockReset();
+      mock.mockReset()
       characteristic.setProps({
         maxValue: NaN,
-      });
+      })
 
-      expect(characteristic.props.maxValue).toEqual(undefined);
-      expect(mock).toHaveBeenCalledTimes(1);
-      expect(mock).toHaveBeenCalledWith(expect.stringContaining("Property 'maxValue' must be a finite number"), expect.anything());
-    });
+      expect(characteristic.props.maxValue).toEqual(undefined)
+      expect(mock).toHaveBeenCalledTimes(1)
+      expect(mock).toHaveBeenCalledWith(expect.stringContaining('Property \'maxValue\' must be a finite number'), expect.anything())
+    })
 
-    test.each([Formats.INT, Formats.FLOAT, Formats.UINT8, Formats.UINT16, Formats.UINT32, Formats.UINT64])(
-      "numeric values of format %p should be corrected on setProps call with min/max restrictions", format => {
+    it.each([
+      Formats.INT,
+      Formats.FLOAT,
+      Formats.UINT8,
+      Formats.UINT16,
+      Formats.UINT32,
+      Formats.UINT64,
+    ])(
+      'numeric values of format %p should be corrected on setProps call with min/max restrictions', (format) => {
         const characteristic = createCharacteristicWithProps({
-          format: format,
+          format,
           perms: [Perms.NOTIFY, Perms.PAIRED_READ, Perms.PAIRED_WRITE],
-        });
+        })
 
-        const changedMock = jest.fn();
-        characteristic.on(CharacteristicEventTypes.CHANGE, changedMock);
-        // @ts-expect-error: spying on private property
-        const warningMock = jest.spyOn(characteristic, "characteristicWarning");
+        const changedMock = vi.fn()
+        characteristic.on(CharacteristicEventTypes.CHANGE, changedMock)
+        const warningMock = vi.spyOn(characteristic, 'characteristicWarning')
 
         const expectNoChange = () => {
-          expect(changedMock).toHaveBeenCalledTimes(0);
-          expect(warningMock).toHaveBeenCalledTimes(0);
-        };
+          expect(changedMock).toHaveBeenCalledTimes(0)
+          expect(warningMock).toHaveBeenCalledTimes(0)
+        }
 
         const expectChange = () => {
-          expect(changedMock).toHaveBeenCalledTimes(1);
-          expect(warningMock).toHaveBeenCalledTimes(1);
-          expect(warningMock).toHaveBeenCalledWith(expect.anything(), CharacteristicWarningType.DEBUG_MESSAGE);
-        };
+          expect(changedMock).toHaveBeenCalledTimes(1)
+          expect(warningMock).toHaveBeenCalledTimes(1)
+          expect(warningMock).toHaveBeenCalledWith(expect.anything(), CharacteristicWarningType.DEBUG_MESSAGE)
+        }
 
         const reset = () => {
-          changedMock.mockReset();
-          warningMock.mockReset();
-        };
+          changedMock.mockReset()
+          warningMock.mockReset()
+        }
 
-        reset();
+        reset()
 
         characteristic.setProps({
           minValue: 0,
           maxValue: 100,
-        });
+        })
 
         // a value of null must not be corrected!
-        expectNoChange();
+        expectNoChange()
 
-        characteristic.setValue(0);
+        characteristic.setValue(0)
 
-        reset();
+        reset()
         characteristic.setProps({
           minValue: 10,
           maxValue: 100,
-        });
+        })
 
         // value should be corrected to 10. If changing the min/max value bounds, users should change the value first!
-        expectChange();
-        expect(characteristic.value).toEqual(10);
+        expectChange()
+        expect(characteristic.value).toEqual(10)
 
-        reset();
+        reset()
         characteristic.setProps({
           minValue: null,
           maxValue: null,
-        });
+        })
 
         // unsetting min/max value restriction must not make a difference
-        expectNoChange();
+        expectNoChange()
 
-        reset();
+        reset()
         characteristic.setProps({
           validValueRanges: [20, 100],
-        });
+        })
 
         // value should be corrected to 20
-        expectChange();
-        expect(characteristic.value).toEqual(20);
+        expectChange()
+        expect(characteristic.value).toEqual(20)
 
-        reset();
+        reset()
         characteristic.setProps({
           validValueRanges: null,
-        });
+        })
 
         // unsetting min/max value restriction must not make a difference
-        expectNoChange();
+        expectNoChange()
 
-        reset();
+        reset()
         characteristic.setProps({
           validValues: [1, 2, 3],
-        });
+        })
 
         // value should be corrected to the first valid value
-        expectChange();
-        expect(characteristic.value).toBe(1);
-      });
+        expectChange()
+        expect(characteristic.value).toBe(1)
+      })
 
-    test("string values should be corrected on setProps call with length restrictions", () => {
+    it('string values should be corrected on setProps call with length restrictions', () => {
       const characteristic = createCharacteristicWithProps({
         format: Formats.STRING,
         perms: [Perms.NOTIFY, Perms.PAIRED_READ, Perms.PAIRED_WRITE],
-      });
+      })
 
-      const changedMock = jest.fn();
-      characteristic.on(CharacteristicEventTypes.CHANGE, changedMock);
-      // @ts-expect-error: spying on private property
-      const warningMock = jest.spyOn(characteristic, "characteristicWarning");
+      const changedMock = vi.fn()
+      characteristic.on(CharacteristicEventTypes.CHANGE, changedMock)
+      const warningMock = vi.spyOn(characteristic, 'characteristicWarning')
 
       const expectNoChange = () => {
-        expect(changedMock).toHaveBeenCalledTimes(0);
-        expect(warningMock).toHaveBeenCalledTimes(0);
-      };
+        expect(changedMock).toHaveBeenCalledTimes(0)
+        expect(warningMock).toHaveBeenCalledTimes(0)
+      }
 
       const expectChange = () => {
-        expect(changedMock).toHaveBeenCalledTimes(1);
-        expect(warningMock).toHaveBeenCalledTimes(1);
-        expect(warningMock).toHaveBeenCalledWith(expect.anything(), CharacteristicWarningType.DEBUG_MESSAGE);
-      };
+        expect(changedMock).toHaveBeenCalledTimes(1)
+        expect(warningMock).toHaveBeenCalledTimes(1)
+        expect(warningMock).toHaveBeenCalledWith(expect.anything(), CharacteristicWarningType.DEBUG_MESSAGE)
+      }
 
       const reset = () => {
-        changedMock.mockReset();
-        warningMock.mockReset();
-      };
+        changedMock.mockReset()
+        warningMock.mockReset()
+      }
 
-      reset();
+      reset()
       characteristic.setProps({
         maxLen: 256,
-      });
+      })
 
-      expectNoChange();
-      expect(characteristic.value).toBeNull();
+      expectNoChange()
+      expect(characteristic.value).toBeNull()
 
-      characteristic.setValue("Hello World");
+      characteristic.setValue('Hello World')
 
-      reset();
+      reset()
       characteristic.setProps({
         maxLen: 5,
-      });
+      })
 
-      expectChange();
-      expect(characteristic.value).toBe("Hello"); // TODO string length cutting should happen on read only?
+      expectChange()
+      expect(characteristic.value).toBe('Hello') // TODO string length cutting should happen on read only?
 
-      reset();
+      reset()
       characteristic.setProps({
         maxLen: null,
-      });
+      })
 
-      expectNoChange();
-    });
+      expectNoChange()
+    })
 
-    test("setProps call should not remove error state", () => {
+    it('setProps call should not remove error state', () => {
       const characteristic = createCharacteristicWithProps({
         format: Formats.STRING,
         perms: [Perms.NOTIFY, Perms.PAIRED_READ, Perms.PAIRED_WRITE],
-      });
+      })
 
-      const changedMock = jest.fn();
-      characteristic.on(CharacteristicEventTypes.CHANGE, changedMock);
-      // @ts-expect-error: spying on private property
-      const warningMock = jest.spyOn(characteristic, "characteristicWarning");
+      const changedMock = vi.fn()
+      characteristic.on(CharacteristicEventTypes.CHANGE, changedMock)
+      const warningMock = vi.spyOn(characteristic, 'characteristicWarning')
 
-      characteristic.setValue("Hello World");
-      characteristic.updateValue(new HapStatusError(HAPStatus.SERVICE_COMMUNICATION_FAILURE));
+      characteristic.setValue('Hello World')
+      characteristic.updateValue(new HapStatusError(HAPStatus.SERVICE_COMMUNICATION_FAILURE))
 
-      changedMock.mockReset();
-      warningMock.mockReset();
+      changedMock.mockReset()
+      warningMock.mockReset()
 
       characteristic.setProps({
         maxLen: 5,
-      });
+      })
 
-      expect(changedMock).toHaveBeenCalledTimes(0);
-      expect(warningMock).toHaveBeenCalledTimes(0);
-      expect(characteristic.statusCode).toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-    });
+      expect(changedMock).toHaveBeenCalledTimes(0)
+      expect(warningMock).toHaveBeenCalledTimes(0)
+      expect(characteristic.statusCode).toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE)
+    })
 
-    test("setProps should not try to correct value if impossible", () => {
+    it('setProps should not try to correct value if impossible', () => {
       const characteristic = createCharacteristicWithProps({
         format: Formats.STRING,
         perms: [Perms.NOTIFY, Perms.PAIRED_READ, Perms.PAIRED_WRITE],
-      });
+      })
 
-      const changedMock = jest.fn();
-      characteristic.on(CharacteristicEventTypes.CHANGE, changedMock);
-      // @ts-expect-error: spying on private property
-      const warningMock = jest.spyOn(characteristic, "characteristicWarning");
+      const changedMock = vi.fn()
+      characteristic.on(CharacteristicEventTypes.CHANGE, changedMock)
+      const warningMock = vi.spyOn(characteristic, 'characteristicWarning')
 
-      characteristic.setValue("Hello World");
+      characteristic.setValue('Hello World')
 
-      changedMock.mockReset();
-      warningMock.mockReset();
+      changedMock.mockReset()
+      warningMock.mockReset()
 
       characteristic.setProps({
         format: Formats.INT,
-      });
+      })
 
-      expect(changedMock).toHaveBeenCalledTimes(0);
-      expect(warningMock).toHaveBeenCalledTimes(0);
-      expect(characteristic.value).toEqual("Hello World");
+      expect(changedMock).toHaveBeenCalledTimes(0)
+      expect(warningMock).toHaveBeenCalledTimes(0)
+      expect(characteristic.value).toEqual('Hello World')
       // when changing the format, users must change the value after changing setProps!
-    });
+    })
 
-    test("setProps must not emit a change event for event-type characteristics: ProgrammableSwitchEvent", () => {
-      const switchEvent = new Characteristic.ProgrammableSwitchEvent();
+    it('setProps must not emit a change event for event-type characteristics: ProgrammableSwitchEvent', () => {
+      const switchEvent = new Characteristic.ProgrammableSwitchEvent()
 
-      const changedMock = jest.fn();
-      switchEvent.on(CharacteristicEventTypes.CHANGE, changedMock);
-      // @ts-expect-error: spying on private property
-      const warningMock = jest.spyOn(switchEvent, "characteristicWarning");
+      const changedMock = vi.fn()
+      switchEvent.on(CharacteristicEventTypes.CHANGE, changedMock)
+      const warningMock = vi.spyOn(switchEvent, 'characteristicWarning')
 
-      switchEvent.updateValue(Characteristic.ProgrammableSwitchEvent.DOUBLE_PRESS);
-      changedMock.mockReset();
-      warningMock.mockReset();
+      switchEvent.updateValue(Characteristic.ProgrammableSwitchEvent.DOUBLE_PRESS)
+      changedMock.mockReset()
+      warningMock.mockReset()
 
       switchEvent.setProps({
         validValues: [0, 2],
-      });
+      })
 
-      expect(changedMock).toHaveBeenCalledTimes(0);
-      expect(warningMock).toHaveBeenCalledTimes(0);
-      expect(switchEvent.value).toEqual(1);
-    });
+      expect(changedMock).toHaveBeenCalledTimes(0)
+      expect(warningMock).toHaveBeenCalledTimes(0)
+      expect(switchEvent.value).toEqual(1)
+    })
 
-    test("setProps must not emit a change event for event-type characteristics: ButtonEvent", () => {
-      const buttonEvent = new Characteristic.ButtonEvent();
+    it('setProps must not emit a change event for event-type characteristics: ButtonEvent', () => {
+      const buttonEvent = new Characteristic.ButtonEvent()
 
-      const changedMock = jest.fn();
-      buttonEvent.on(CharacteristicEventTypes.CHANGE, changedMock);
-      // @ts-expect-error: spying on private property
-      const warningMock = jest.spyOn(buttonEvent, "characteristicWarning");
+      const changedMock = vi.fn()
+      buttonEvent.on(CharacteristicEventTypes.CHANGE, changedMock)
+      const warningMock = vi.spyOn(buttonEvent, 'characteristicWarning')
 
-      buttonEvent.updateValue("0000"); // some empty tlv
-      changedMock.mockReset();
-      warningMock.mockReset();
+      buttonEvent.updateValue('0000') // some empty tlv
+      changedMock.mockReset()
+      warningMock.mockReset()
 
       // we actually don't modify anything
       buttonEvent.setProps({
-      });
+      })
 
-      expect(changedMock).toHaveBeenCalledTimes(0);
-      expect(warningMock).toHaveBeenCalledTimes(0);
-      expect(buttonEvent.value).toEqual("0000");
-    });
-  });
+      expect(changedMock).toHaveBeenCalledTimes(0)
+      expect(warningMock).toHaveBeenCalledTimes(0)
+      expect(buttonEvent.value).toEqual('0000')
+    })
+  })
 
-  describe("validValuesIterator", () => {
-    it ("should iterate over min/max value definition", () => {
+  describe('validValuesIterator', () => {
+    it ('should iterate over min/max value definition', () => {
       const characteristic = createCharacteristicWithProps({
         format: Formats.INT,
         perms: [Perms.PAIRED_READ],
         minValue: 2,
         maxValue: 5,
-      });
+      })
 
-      const result = Array.from(characteristic.validValuesIterator());
-      expect(result).toEqual([2, 3, 4, 5]);
-    });
+      const result = Array.from(characteristic.validValuesIterator())
+      expect(result).toEqual([2, 3, 4, 5])
+    })
 
-    it ("should iterate over min/max value definition with minStep defined", () => {
+    it ('should iterate over min/max value definition with minStep defined', () => {
       const characteristic = createCharacteristicWithProps({
         format: Formats.INT,
         perms: [Perms.PAIRED_READ],
         minValue: 2,
         maxValue: 10,
         minStep: 2, // can't really test with .x precision as of floating point precision
-      });
+      })
 
-      const result = Array.from(characteristic.validValuesIterator());
-      expect(result).toEqual([2, 4, 6, 8, 10]);
-    });
+      const result = Array.from(characteristic.validValuesIterator())
+      expect(result).toEqual([2, 4, 6, 8, 10])
+    })
 
-    it ("should iterate over validValues array definition", () => {
-      const validValues = [1, 3, 4, 5, 8];
+    it ('should iterate over validValues array definition', () => {
+      const validValues = [1, 3, 4, 5, 8]
       const characteristic = createCharacteristicWithProps({
         format: Formats.INT,
         perms: [Perms.PAIRED_READ],
-        validValues: validValues,
-      });
+        validValues,
+      })
 
-      const result = Array.from(characteristic.validValuesIterator());
-      expect(result).toEqual(validValues);
-    });
+      const result = Array.from(characteristic.validValuesIterator())
+      expect(result).toEqual(validValues)
+    })
 
-    it ("should iterate over validValueRanges definition", () => {
+    it ('should iterate over validValueRanges definition', () => {
       const characteristic = createCharacteristicWithProps({
         format: Formats.INT,
         perms: [Perms.PAIRED_READ],
         validValueRanges: [2, 5],
-      });
+      })
 
-      const result = Array.from(characteristic.validValuesIterator());
-      expect(result).toEqual([2, 3, 4, 5]);
-    });
+      const result = Array.from(characteristic.validValuesIterator())
+      expect(result).toEqual([2, 3, 4, 5])
+    })
 
-    it("should iterate over UINT8 definition", () => {
-      const characteristic = createCharacteristic(Formats.UINT8);
+    it('should iterate over UINT8 definition', () => {
+      const characteristic = createCharacteristic(Formats.UINT8)
 
-      const result = Array.from(characteristic.validValuesIterator());
-      expect(result).toEqual(Array.from(new Uint8Array(256).map((value, i) => i)));
-    });
+      const result = Array.from(characteristic.validValuesIterator())
+      expect(result).toEqual(Array.from(new Uint8Array(256).map((value, i) => i)))
+    })
 
     // we could do the same for UINT16, UINT32 and UINT64 but i think thats kind of pointless and takes to long
-  });
+  })
 
-  describe("#subscribe()", () => {
-    it("correctly adds a single subscription", () => {
-      const characteristic = createCharacteristic(Formats.BOOL);
-      const subscribeSpy = jest.fn();
-      characteristic.on(CharacteristicEventTypes.SUBSCRIBE, subscribeSpy);
-      characteristic.subscribe();
+  describe('#subscribe()', () => {
+    it('correctly adds a single subscription', () => {
+      const characteristic = createCharacteristic(Formats.BOOL)
+      const subscribeSpy = vi.fn()
+      characteristic.on(CharacteristicEventTypes.SUBSCRIBE, subscribeSpy)
+      characteristic.subscribe()
 
-      expect(subscribeSpy).toHaveBeenCalledTimes(1);
+      expect(subscribeSpy).toHaveBeenCalledTimes(1)
       // @ts-expect-error: private access
-      expect(characteristic.subscriptions).toEqual(1);
-    });
+      expect(characteristic.subscriptions).toEqual(1)
+    })
 
-    it("correctly adds multiple subscriptions", () => {
-      const characteristic = createCharacteristic(Formats.BOOL);
-      const subscribeSpy = jest.fn();
-      characteristic.on(CharacteristicEventTypes.SUBSCRIBE, subscribeSpy);
-      characteristic.subscribe();
-      characteristic.subscribe();
-      characteristic.subscribe();
+    it('correctly adds multiple subscriptions', () => {
+      const characteristic = createCharacteristic(Formats.BOOL)
+      const subscribeSpy = vi.fn()
+      characteristic.on(CharacteristicEventTypes.SUBSCRIBE, subscribeSpy)
+      characteristic.subscribe()
+      characteristic.subscribe()
+      characteristic.subscribe()
 
-      expect(subscribeSpy).toHaveBeenCalledTimes(1);
+      expect(subscribeSpy).toHaveBeenCalledTimes(1)
       // @ts-expect-error: private access
-      expect(characteristic.subscriptions).toEqual(3);
-    });
-  });
+      expect(characteristic.subscriptions).toEqual(3)
+    })
+  })
 
-  describe("#unsubscribe()", () => {
-    it("correctly removes a single subscription", () => {
-      const characteristic = createCharacteristic(Formats.BOOL);
-      const subscribeSpy = jest.fn();
-      const unsubscribeSpy = jest.fn();
-      characteristic.on(CharacteristicEventTypes.SUBSCRIBE, subscribeSpy);
-      characteristic.on(CharacteristicEventTypes.UNSUBSCRIBE, unsubscribeSpy);
-      characteristic.subscribe();
-      characteristic.unsubscribe();
+  describe('#unsubscribe()', () => {
+    it('correctly removes a single subscription', () => {
+      const characteristic = createCharacteristic(Formats.BOOL)
+      const subscribeSpy = vi.fn()
+      const unsubscribeSpy = vi.fn()
+      characteristic.on(CharacteristicEventTypes.SUBSCRIBE, subscribeSpy)
+      characteristic.on(CharacteristicEventTypes.UNSUBSCRIBE, unsubscribeSpy)
+      characteristic.subscribe()
+      characteristic.unsubscribe()
 
-      expect(subscribeSpy).toHaveBeenCalledTimes(1);
-      expect(unsubscribeSpy).toHaveBeenCalledTimes(1);
+      expect(subscribeSpy).toHaveBeenCalledTimes(1)
+      expect(unsubscribeSpy).toHaveBeenCalledTimes(1)
       // @ts-expect-error: private access
-      expect(characteristic.subscriptions).toEqual(0);
-    });
+      expect(characteristic.subscriptions).toEqual(0)
+    })
 
-    it("correctly removes multiple subscriptions", () => {
-      const characteristic = createCharacteristic(Formats.BOOL);
-      const subscribeSpy = jest.fn();
-      const unsubscribeSpy = jest.fn();
-      characteristic.on(CharacteristicEventTypes.SUBSCRIBE, subscribeSpy);
-      characteristic.on(CharacteristicEventTypes.UNSUBSCRIBE, unsubscribeSpy);
-      characteristic.subscribe();
-      characteristic.subscribe();
-      characteristic.subscribe();
-      characteristic.unsubscribe();
-      characteristic.unsubscribe();
-      characteristic.unsubscribe();
+    it('correctly removes multiple subscriptions', () => {
+      const characteristic = createCharacteristic(Formats.BOOL)
+      const subscribeSpy = vi.fn()
+      const unsubscribeSpy = vi.fn()
+      characteristic.on(CharacteristicEventTypes.SUBSCRIBE, subscribeSpy)
+      characteristic.on(CharacteristicEventTypes.UNSUBSCRIBE, unsubscribeSpy)
+      characteristic.subscribe()
+      characteristic.subscribe()
+      characteristic.subscribe()
+      characteristic.unsubscribe()
+      characteristic.unsubscribe()
+      characteristic.unsubscribe()
 
-      expect(subscribeSpy).toHaveBeenCalledTimes(1);
-      expect(unsubscribeSpy).toHaveBeenCalledTimes(1);
+      expect(subscribeSpy).toHaveBeenCalledTimes(1)
+      expect(unsubscribeSpy).toHaveBeenCalledTimes(1)
       // @ts-expect-error: private access
-      expect(characteristic.subscriptions).toEqual(0);
-    });
-  });
+      expect(characteristic.subscriptions).toEqual(0)
+    })
+  })
 
-  describe("#handleGetRequest()", () => {
-    it("should handle special event only characteristics", (callback) => {
-      const characteristic = createCharacteristic(Formats.BOOL, Characteristic.ProgrammableSwitchEvent.UUID);
+  describe('#handleGetRequest()', () => {
+    it('should handle special event only characteristics', () => new Promise<void>((callback) => {
+      const characteristic = createCharacteristic(Formats.BOOL, Characteristic.ProgrammableSwitchEvent.UUID)
 
       characteristic.handleGetRequest().then(() => {
-        expect(characteristic.statusCode).toEqual(HAPStatus.SUCCESS);
-        expect(characteristic.value).toEqual(null);
-        callback();
-      });
-    });
+        expect(characteristic.statusCode).toEqual(HAPStatus.SUCCESS)
+        expect(characteristic.value).toEqual(null)
+        callback()
+      })
+    }))
 
-    it("should return cached values if no listeners are registered", (callback) => {
-      const characteristic = createCharacteristic(Formats.BOOL);
+    it('should return cached values if no listeners are registered', () => new Promise<void>((callback) => {
+      const characteristic = createCharacteristic(Formats.BOOL)
 
       characteristic.handleGetRequest().then(() => {
-        expect(characteristic.statusCode).toEqual(HAPStatus.SUCCESS);
-        expect(characteristic.value).toEqual(null);
-        callback();
-      });
-    });
-  });
+        expect(characteristic.statusCode).toEqual(HAPStatus.SUCCESS)
+        expect(characteristic.value).toEqual(null)
+        callback()
+      })
+    }))
+  })
 
-  describe("#validateClientSuppliedValue()", () => {
-    it("rejects undefined values from client", async () => {
+  describe('#validateClientSuppliedValue()', () => {
+    it('rejects undefined values from client', async () => {
       const characteristic = createCharacteristicWithProps({
         format: Formats.UINT8,
         maxValue: 1,
         minValue: 0,
         minStep: 1,
         perms: [Perms.EVENTS, Perms.PAIRED_READ, Perms.PAIRED_WRITE],
-      });
+      })
 
-      // @ts-expect-error: spying on private property
-      const validateClientSuppliedValueMock = jest.spyOn(characteristic, "validateClientSuppliedValue");
+      const validateClientSuppliedValueMock = vi.spyOn(characteristic, 'validateClientSuppliedValue')
 
       // set initial known good value
-      characteristic.setValue(1);
+      characteristic.setValue(1)
 
       // this should throw an error
       await expect(characteristic.handleSetRequest(undefined as unknown as boolean, null as unknown as undefined))
-        .rejects.toEqual(HAPStatus.INVALID_VALUE_IN_REQUEST);
+        .rejects
+        .toEqual(HAPStatus.INVALID_VALUE_IN_REQUEST)
 
       // the existing valid value should remain
-      expect(characteristic.value).toEqual(1);
+      expect(characteristic.value).toEqual(1)
 
       // ensure validator was actually called
-      expect(validateClientSuppliedValueMock).toHaveBeenCalledTimes(1);
-    });
+      expect(validateClientSuppliedValueMock).toHaveBeenCalledTimes(1)
+    })
 
-    it("rejects invalid values for the boolean format type", async () => {
+    it('rejects invalid values for the boolean format type', async () => {
       const characteristic = createCharacteristicWithProps({
         format: Formats.BOOL,
         maxValue: 1,
         minValue: 0,
         minStep: 1,
         perms: [Perms.EVENTS, Perms.PAIRED_READ, Perms.PAIRED_WRITE],
-      });
+      })
 
-      // @ts-expect-error: spying on private property
-      const validateClientSuppliedValueMock = jest.spyOn(characteristic, "validateClientSuppliedValue");
+      const validateClientSuppliedValueMock = vi.spyOn(characteristic, 'validateClientSuppliedValue')
 
       // set initial known good value
-      characteristic.setValue(true);
+      characteristic.setValue(true)
 
       // numbers other than 1 or 0 should throw an error
       await expect(characteristic.handleSetRequest(20, null as unknown as undefined))
-        .rejects.toEqual(HAPStatus.INVALID_VALUE_IN_REQUEST);
+        .rejects
+        .toEqual(HAPStatus.INVALID_VALUE_IN_REQUEST)
 
       // strings should throw an error
-      await expect(characteristic.handleSetRequest("true", null as unknown as undefined))
-        .rejects.toEqual(HAPStatus.INVALID_VALUE_IN_REQUEST);
+      await expect(characteristic.handleSetRequest('true', null as unknown as undefined))
+        .rejects
+        .toEqual(HAPStatus.INVALID_VALUE_IN_REQUEST)
 
       // the existing valid value should remain
-      expect(characteristic.value).toEqual(true);
+      expect(characteristic.value).toEqual(true)
 
       // 0 should set the value to false
       await expect(characteristic.handleSetRequest(0, null as unknown as undefined))
-        .resolves.toEqual(undefined);
-      expect(characteristic.value).toEqual(false);
+        .resolves
+        .toEqual(undefined)
+      expect(characteristic.value).toEqual(false)
 
       // 1 should set the value to true
       await expect(characteristic.handleSetRequest(1, null as unknown as undefined))
-        .resolves.toEqual(undefined);
-      expect(characteristic.value).toEqual(true);
+        .resolves
+        .toEqual(undefined)
+      expect(characteristic.value).toEqual(true)
 
       // ensure validator was actually called
-      expect(validateClientSuppliedValueMock).toHaveBeenCalledTimes(4);
-    });
+      expect(validateClientSuppliedValueMock).toHaveBeenCalledTimes(4)
+    })
 
-    test.each([Formats.INT, Formats.FLOAT, Formats.UINT8, Formats.UINT16, Formats.UINT32, Formats.UINT64])(
-      "boolean types sent for %p types should be transformed from false to 0", async (intType) => {
+    it.each([
+      Formats.INT,
+      Formats.FLOAT,
+      Formats.UINT8,
+      Formats.UINT16,
+      Formats.UINT32,
+      Formats.UINT64,
+    ])(
+      'boolean types sent for %p types should be transformed from false to 0', async (intType) => {
         const characteristic = createCharacteristicWithProps({
           format: intType,
           maxValue: 1,
           minValue: 0,
           minStep: 1,
           perms: [Perms.EVENTS, Perms.PAIRED_READ, Perms.PAIRED_WRITE],
-        });
+        })
 
-        // @ts-expect-error: spying on private property
-        const validateClientSuppliedValueMock = jest.spyOn(characteristic, "validateClientSuppliedValue");
+        const validateClientSuppliedValueMock = vi.spyOn(characteristic, 'validateClientSuppliedValue')
 
-        await characteristic.handleSetRequest(false, null as unknown as undefined);
-        expect(characteristic.value).toEqual(0);
+        await characteristic.handleSetRequest(false, null as unknown as undefined)
+        expect(characteristic.value).toEqual(0)
 
         // ensure validator was actually called
-        expect(validateClientSuppliedValueMock).toHaveBeenCalledTimes(1);
-      });
+        expect(validateClientSuppliedValueMock).toHaveBeenCalledTimes(1)
+      })
 
-
-    test.each([Formats.INT, Formats.FLOAT, Formats.UINT8, Formats.UINT16, Formats.UINT32, Formats.UINT64])(
-      "boolean types sent for %p types should be transformed from true to 1", async (intType) => {
+    it.each([
+      Formats.INT,
+      Formats.FLOAT,
+      Formats.UINT8,
+      Formats.UINT16,
+      Formats.UINT32,
+      Formats.UINT64,
+    ])(
+      'boolean types sent for %p types should be transformed from true to 1', async (intType) => {
         const characteristic = createCharacteristicWithProps({
           format: intType,
           maxValue: 1,
           minValue: 0,
           minStep: 1,
           perms: [Perms.EVENTS, Perms.PAIRED_READ, Perms.PAIRED_WRITE],
-        });
+        })
 
-        // @ts-expect-error: spying on private property
-        const validateClientSuppliedValueMock = jest.spyOn(characteristic, "validateClientSuppliedValue");
+        const validateClientSuppliedValueMock = vi.spyOn(characteristic, 'validateClientSuppliedValue')
 
-        await characteristic.handleSetRequest(true, null as unknown as undefined);
-        expect(characteristic.value).toEqual(1);
+        await characteristic.handleSetRequest(true, null as unknown as undefined)
+        expect(characteristic.value).toEqual(1)
 
         // ensure validator was actually called
-        expect(validateClientSuppliedValueMock).toHaveBeenCalledTimes(1);
-      });
+        expect(validateClientSuppliedValueMock).toHaveBeenCalledTimes(1)
+      })
 
-    test.each([Formats.INT, Formats.FLOAT, Formats.UINT8, Formats.UINT16, Formats.UINT32, Formats.UINT64])(
-      "rejects string values sent for %p types sent from client", async (intType) => {
+    it.each([
+      Formats.INT,
+      Formats.FLOAT,
+      Formats.UINT8,
+      Formats.UINT16,
+      Formats.UINT32,
+      Formats.UINT64,
+    ])(
+      'rejects string values sent for %p types sent from client', async (intType) => {
         const characteristic = createCharacteristicWithProps({
           format: intType,
           maxValue: 1,
           minValue: 0,
           minStep: 1,
           perms: [Perms.EVENTS, Perms.PAIRED_READ, Perms.PAIRED_WRITE],
-        });
+        })
 
-        // @ts-expect-error: spying on private property
-        const validateClientSuppliedValueMock = jest.spyOn(characteristic, "validateClientSuppliedValue");
+        const validateClientSuppliedValueMock = vi.spyOn(characteristic, 'validateClientSuppliedValue')
 
         // set initial known good value
-        characteristic.setValue(1);
+        characteristic.setValue(1)
 
         // this should throw an error
-        await expect(characteristic.handleSetRequest("what is this!", null as unknown as undefined))
-          .rejects.toEqual(HAPStatus.INVALID_VALUE_IN_REQUEST);
+        await expect(characteristic.handleSetRequest('what is this!', null as unknown as undefined))
+          .rejects
+          .toEqual(HAPStatus.INVALID_VALUE_IN_REQUEST)
 
         // the existing valid value should remain
-        expect(characteristic.value).toEqual(1);
+        expect(characteristic.value).toEqual(1)
 
         // ensure validator was actually called
-        expect(validateClientSuppliedValueMock).toHaveBeenCalledTimes(1);
-      });
+        expect(validateClientSuppliedValueMock).toHaveBeenCalledTimes(1)
+      })
 
-    test.each([Formats.INT, Formats.FLOAT, Formats.UINT8, Formats.UINT16, Formats.UINT32, Formats.UINT64])(
-      "ensure maxValue is not exceeded for %p types sent from client", async (intType) => {
+    it.each([
+      Formats.INT,
+      Formats.FLOAT,
+      Formats.UINT8,
+      Formats.UINT16,
+      Formats.UINT32,
+      Formats.UINT64,
+    ])(
+      'ensure maxValue is not exceeded for %p types sent from client', async (intType) => {
         const characteristic = createCharacteristicWithProps({
           format: intType,
           maxValue: 1,
           minValue: 0,
           minStep: 1,
           perms: [Perms.EVENTS, Perms.PAIRED_READ, Perms.PAIRED_WRITE],
-        });
+        })
 
-        // @ts-expect-error: spying on private property
-        const validateClientSuppliedValueMock = jest.spyOn(characteristic, "validateClientSuppliedValue");
+        const validateClientSuppliedValueMock = vi.spyOn(characteristic, 'validateClientSuppliedValue')
 
         // set initial known good value
-        characteristic.setValue(1);
+        characteristic.setValue(1)
 
         // this should throw an error
         await expect(characteristic.handleSetRequest(100, null as unknown as undefined))
-          .rejects.toEqual(HAPStatus.INVALID_VALUE_IN_REQUEST);
+          .rejects
+          .toEqual(HAPStatus.INVALID_VALUE_IN_REQUEST)
 
         // this should throw an error
         await expect(characteristic.handleSetRequest(-100, null as unknown as undefined))
-          .rejects.toEqual(HAPStatus.INVALID_VALUE_IN_REQUEST);
+          .rejects
+          .toEqual(HAPStatus.INVALID_VALUE_IN_REQUEST)
 
         // value should revert to
-        expect(characteristic.value).toEqual(1);
+        expect(characteristic.value).toEqual(1)
 
         // this should pass
         await expect(characteristic.handleSetRequest(0, null as unknown as undefined))
-          .resolves.toEqual(undefined);
+          .resolves
+          .toEqual(undefined)
 
         // value should now be 3
-        expect(characteristic.value).toEqual(0);
+        expect(characteristic.value).toEqual(0)
 
         // ensure validator was actually called
-        expect(validateClientSuppliedValueMock).toHaveBeenCalledTimes(3);
-      });
+        expect(validateClientSuppliedValueMock).toHaveBeenCalledTimes(3)
+      })
 
-    test.each([Formats.INT, Formats.FLOAT, Formats.UINT8, Formats.UINT16, Formats.UINT32, Formats.UINT64])(
-      "ensure NaN is rejected for %p types sent from client", async (intType) => {
+    it.each([
+      Formats.INT,
+      Formats.FLOAT,
+      Formats.UINT8,
+      Formats.UINT16,
+      Formats.UINT32,
+      Formats.UINT64,
+    ])(
+      'ensure NaN is rejected for %p types sent from client', async (intType) => {
         const characteristic = createCharacteristicWithProps({
           format: intType,
           maxValue: 1,
           minValue: 0,
           minStep: 1,
           perms: [Perms.EVENTS, Perms.PAIRED_READ, Perms.PAIRED_WRITE],
-        });
+        })
 
-        // @ts-expect-error: spying on private property
-        const validateClientSuppliedValueMock = jest.spyOn(characteristic, "validateClientSuppliedValue");
+        const validateClientSuppliedValueMock = vi.spyOn(characteristic, 'validateClientSuppliedValue')
 
         // set initial known good value
-        characteristic.setValue(1);
+        characteristic.setValue(1)
 
         // this should throw an error
         await expect(characteristic.handleSetRequest(NaN, null as unknown as undefined))
-          .rejects.toEqual(HAPStatus.INVALID_VALUE_IN_REQUEST);
+          .rejects
+          .toEqual(HAPStatus.INVALID_VALUE_IN_REQUEST)
 
         // value should revert to
-        expect(characteristic.value).toEqual(1);
+        expect(characteristic.value).toEqual(1)
 
         // ensure validator was actually called
-        expect(validateClientSuppliedValueMock).toHaveBeenCalledTimes(1);
-      });
+        expect(validateClientSuppliedValueMock).toHaveBeenCalledTimes(1)
+      })
 
-    test.each([Formats.INT, Formats.FLOAT, Formats.UINT8, Formats.UINT16, Formats.UINT32, Formats.UINT64])(
-      "ensure non-finite values are rejected for %p types sent from client", async (intType) => {
+    it.each([
+      Formats.INT,
+      Formats.FLOAT,
+      Formats.UINT8,
+      Formats.UINT16,
+      Formats.UINT32,
+      Formats.UINT64,
+    ])(
+      'ensure non-finite values are rejected for %p types sent from client', async (intType) => {
         const characteristic = createCharacteristicWithProps({
           format: intType,
           perms: [Perms.EVENTS, Perms.PAIRED_READ, Perms.PAIRED_WRITE],
-        });
+        })
 
-        // @ts-expect-error: spying on private property
-        const validateClientSuppliedValueMock = jest.spyOn(characteristic, "validateClientSuppliedValue");
+        const validateClientSuppliedValueMock = vi.spyOn(characteristic, 'validateClientSuppliedValue')
 
         // set initial known good value
-        characteristic.setValue(1);
+        characteristic.setValue(1)
 
         // this should throw an error
         await expect(characteristic.handleSetRequest(Infinity, null as unknown as undefined))
-          .rejects.toEqual(HAPStatus.INVALID_VALUE_IN_REQUEST);
+          .rejects
+          .toEqual(HAPStatus.INVALID_VALUE_IN_REQUEST)
 
         // value should revert to
-        expect(characteristic.value).toEqual(1);
+        expect(characteristic.value).toEqual(1)
 
         // ensure validator was actually called
-        expect(validateClientSuppliedValueMock).toHaveBeenCalledTimes(1);
-      });
+        expect(validateClientSuppliedValueMock).toHaveBeenCalledTimes(1)
+      })
 
-    test.each([Formats.INT, Formats.FLOAT, Formats.UINT8, Formats.UINT16, Formats.UINT32, Formats.UINT64])(
-      "ensure value is rejected if outside valid values for %p types sent from client", async (intType) => {
+    it.each([
+      Formats.INT,
+      Formats.FLOAT,
+      Formats.UINT8,
+      Formats.UINT16,
+      Formats.UINT32,
+      Formats.UINT64,
+    ])(
+      'ensure value is rejected if outside valid values for %p types sent from client', async (intType) => {
         const characteristic = createCharacteristicWithProps({
           format: intType,
           maxValue: 10,
@@ -969,34 +1068,42 @@ describe("Characteristic", () => {
           minStep: 1,
           validValues: [1, 3, 5, 10],
           perms: [Perms.EVENTS, Perms.PAIRED_READ, Perms.PAIRED_WRITE],
-        });
+        })
 
-        // @ts-expect-error: spying on private property
-        const validateClientSuppliedValueMock = jest.spyOn(characteristic, "validateClientSuppliedValue");
+        const validateClientSuppliedValueMock = vi.spyOn(characteristic, 'validateClientSuppliedValue')
 
         // set initial known good value
-        characteristic.setValue(1);
+        characteristic.setValue(1)
 
         // this should throw an error
         await expect(characteristic.handleSetRequest(6, null as unknown as undefined))
-          .rejects.toEqual(HAPStatus.INVALID_VALUE_IN_REQUEST);
+          .rejects
+          .toEqual(HAPStatus.INVALID_VALUE_IN_REQUEST)
 
         // value should revert to
-        expect(characteristic.value).toEqual(1);
+        expect(characteristic.value).toEqual(1)
 
         // this should pass
         await expect(characteristic.handleSetRequest(3, null as unknown as undefined))
-          .resolves.toEqual(undefined);
+          .resolves
+          .toEqual(undefined)
 
         // value should now be 3
-        expect(characteristic.value).toEqual(3);
+        expect(characteristic.value).toEqual(3)
 
         // ensure validator was actually called
-        expect(validateClientSuppliedValueMock).toHaveBeenCalledTimes(2);
-      });
+        expect(validateClientSuppliedValueMock).toHaveBeenCalledTimes(2)
+      })
 
-    test.each([Formats.INT, Formats.FLOAT, Formats.UINT8, Formats.UINT16, Formats.UINT32, Formats.UINT64])(
-      "ensure value is rejected if outside valid value ranges for %p types sent from client", async (intType) => {
+    it.each([
+      Formats.INT,
+      Formats.FLOAT,
+      Formats.UINT8,
+      Formats.UINT16,
+      Formats.UINT32,
+      Formats.UINT64,
+    ])(
+      'ensure value is rejected if outside valid value ranges for %p types sent from client', async (intType) => {
         const characteristic = createCharacteristicWithProps({
           format: intType,
           maxValue: 1000,
@@ -1004,1263 +1111,1305 @@ describe("Characteristic", () => {
           minStep: 1,
           validValueRanges: [50, 55],
           perms: [Perms.EVENTS, Perms.PAIRED_READ, Perms.PAIRED_WRITE],
-        });
+        })
 
-        // @ts-expect-error: spying on private property
-        const validateClientSuppliedValueMock = jest.spyOn(characteristic, "validateClientSuppliedValue");
+        const validateClientSuppliedValueMock = vi.spyOn(characteristic, 'validateClientSuppliedValue')
 
         // set initial known good value
-        characteristic.setValue(50);
+        characteristic.setValue(50)
 
         // this should throw an error
         await expect(characteristic.handleSetRequest(100, null as unknown as undefined))
-          .rejects.toEqual(HAPStatus.INVALID_VALUE_IN_REQUEST);
+          .rejects
+          .toEqual(HAPStatus.INVALID_VALUE_IN_REQUEST)
 
         // this should throw an error
         await expect(characteristic.handleSetRequest(20, null as unknown as undefined))
-          .rejects.toEqual(HAPStatus.INVALID_VALUE_IN_REQUEST);
+          .rejects
+          .toEqual(HAPStatus.INVALID_VALUE_IN_REQUEST)
 
         // value should still be 50
-        expect(characteristic.value).toEqual(50);
+        expect(characteristic.value).toEqual(50)
 
         // this should pass
         await expect(characteristic.handleSetRequest(52, null as unknown as undefined))
-          .resolves.toEqual(undefined);
+          .resolves
+          .toEqual(undefined)
 
         // value should now be 52
-        expect(characteristic.value).toEqual(52);
+        expect(characteristic.value).toEqual(52)
 
         // ensure validator was actually called
-        expect(validateClientSuppliedValueMock).toHaveBeenCalledTimes(3);
-      });
+        expect(validateClientSuppliedValueMock).toHaveBeenCalledTimes(3)
+      })
 
-    test.each([Formats.STRING, Formats.TLV8, Formats.DATA])(
-      "rejects non-string values for the %p format type from the client", async (stringType) => {
+    it.each([Formats.STRING, Formats.TLV8, Formats.DATA])(
+      'rejects non-string values for the %p format type from the client', async (stringType) => {
         const characteristic = createCharacteristicWithProps({
           format: stringType,
           perms: [Perms.EVENTS, Perms.PAIRED_READ, Perms.PAIRED_WRITE],
-        });
+        })
 
-        // @ts-expect-error: spying on private property
-        const validateClientSuppliedValueMock = jest.spyOn(characteristic, "validateClientSuppliedValue");
+        const validateClientSuppliedValueMock = vi.spyOn(characteristic, 'validateClientSuppliedValue')
 
         // set initial known good value
-        characteristic.setValue("some string");
+        characteristic.setValue('some string')
 
         // numbers should throw an error
         await expect(characteristic.handleSetRequest(1234, null as unknown as undefined))
-          .rejects.toEqual(HAPStatus.INVALID_VALUE_IN_REQUEST);
+          .rejects
+          .toEqual(HAPStatus.INVALID_VALUE_IN_REQUEST)
 
         // booleans should throw an error
         await expect(characteristic.handleSetRequest(false, null as unknown as undefined))
-          .rejects.toEqual(HAPStatus.INVALID_VALUE_IN_REQUEST);
+          .rejects
+          .toEqual(HAPStatus.INVALID_VALUE_IN_REQUEST)
 
         // the existing valid value should remain
-        expect(characteristic.value).toEqual("some string");
+        expect(characteristic.value).toEqual('some string')
 
         // strings should pass
-        await expect(characteristic.handleSetRequest("some other test string", null as unknown as undefined))
-          .resolves.toEqual(undefined);
+        await expect(characteristic.handleSetRequest('some other test string', null as unknown as undefined))
+          .resolves
+          .toEqual(undefined)
 
         // value should now be updated
-        expect(characteristic.value).toEqual("some other test string");
+        expect(characteristic.value).toEqual('some other test string')
 
         // ensure validator was actually called
-        expect(validateClientSuppliedValueMock).toHaveBeenCalledTimes(3);
-      });
+        expect(validateClientSuppliedValueMock).toHaveBeenCalledTimes(3)
+      })
 
-    it("should accept Formats.FLOAT with precision provided by client", async () => {
+    it('should accept Formats.FLOAT with precision provided by client', async () => {
       const characteristic = createCharacteristicWithProps({
         format: Formats.FLOAT,
         perms: [Perms.EVENTS, Perms.PAIRED_READ, Perms.PAIRED_WRITE],
-      });
+      })
 
-      // @ts-expect-error: spying on private property
-      const validateClientSuppliedValueMock = jest.spyOn(characteristic, "validateClientSuppliedValue");
+      const validateClientSuppliedValueMock = vi.spyOn(characteristic, 'validateClientSuppliedValue')
 
       // set initial known good value
-      characteristic.setValue(0.0005);
+      characteristic.setValue(0.0005)
 
       // the existing valid value should remain
-      expect(characteristic.value).toEqual(0.0005);
+      expect(characteristic.value).toEqual(0.0005)
 
       // should allow float
       await expect(characteristic.handleSetRequest(0.0001005, null as unknown as undefined))
-        .resolves.toEqual(undefined);
+        .resolves
+        .toEqual(undefined)
 
       // value should now be updated
-      expect(characteristic.value).toEqual(0.0001005);
+      expect(characteristic.value).toEqual(0.0001005)
 
       // ensure validator was actually called
-      expect(validateClientSuppliedValueMock).toHaveBeenCalledTimes(1);
-    });
+      expect(validateClientSuppliedValueMock).toHaveBeenCalledTimes(1)
+    })
 
-    it("should accept negative floats in range for Formats.FLOAT provided by the client", async () => {
+    it('should accept negative floats in range for Formats.FLOAT provided by the client', async () => {
       const characteristic = createCharacteristicWithProps({
         format: Formats.FLOAT,
         perms: [Perms.PAIRED_READ, Perms.PAIRED_WRITE],
         minValue: -1000,
         maxValue: 1000,
-      });
+      })
 
-      // @ts-expect-error - spying on private property
-      const validateClientSuppliedValueMock = jest.spyOn(characteristic, "validateClientSuppliedValue");
+      const validateClientSuppliedValueMock = vi.spyOn(characteristic, 'validateClientSuppliedValue')
 
       // should allow negative float
       await expect(characteristic.handleSetRequest(-0.013, null as unknown as undefined))
-        .resolves.toEqual(undefined);
+        .resolves
+        .toEqual(undefined)
 
       // value should now be updated
-      expect(characteristic.value).toEqual(-0.013);
+      expect(characteristic.value).toEqual(-0.013)
 
       // ensure validator was actually called
-      expect(validateClientSuppliedValueMock).toHaveBeenCalledTimes(1);
-    });
+      expect(validateClientSuppliedValueMock).toHaveBeenCalledTimes(1)
+    })
 
-    it("rejects string values exceeding the max length from the client", async () => {
+    it('rejects string values exceeding the max length from the client', async () => {
       const characteristic = createCharacteristicWithProps({
         format: Formats.STRING,
         maxLen: 5,
         perms: [Perms.EVENTS, Perms.PAIRED_READ, Perms.PAIRED_WRITE],
-      });
+      })
 
-      // @ts-expect-error: spying on private property
-      const validateClientSuppliedValueMock = jest.spyOn(characteristic, "validateClientSuppliedValue");
+      const validateClientSuppliedValueMock = vi.spyOn(characteristic, 'validateClientSuppliedValue')
 
       // set initial known good value
-      characteristic.setValue("abcde");
+      characteristic.setValue('abcde')
 
       // should reject strings that are to long
-      await expect(characteristic.handleSetRequest("this is to long", null as unknown as undefined))
-        .rejects.toEqual(HAPStatus.INVALID_VALUE_IN_REQUEST);
+      await expect(characteristic.handleSetRequest('this is to long', null as unknown as undefined))
+        .rejects
+        .toEqual(HAPStatus.INVALID_VALUE_IN_REQUEST)
 
       // the existing valid value should remain
-      expect(characteristic.value).toEqual("abcde");
+      expect(characteristic.value).toEqual('abcde')
 
       // strings should pass
-      await expect(characteristic.handleSetRequest("abc", null as unknown as undefined))
-        .resolves.toEqual(undefined);
+      await expect(characteristic.handleSetRequest('abc', null as unknown as undefined))
+        .resolves
+        .toEqual(undefined)
 
       // value should now be updated
-      expect(characteristic.value).toEqual("abc");
+      expect(characteristic.value).toEqual('abc')
 
       // ensure validator was actually called
-      expect(validateClientSuppliedValueMock).toHaveBeenCalledTimes(2);
-    });
+      expect(validateClientSuppliedValueMock).toHaveBeenCalledTimes(2)
+    })
 
-    it("rejects data values exceeding the max length from the client", async () => {
+    it('rejects data values exceeding the max length from the client', async () => {
       const characteristic = createCharacteristicWithProps({
         format: Formats.DATA,
         maxDataLen: 5,
         perms: [Perms.EVENTS, Perms.PAIRED_READ, Perms.PAIRED_WRITE],
-      });
+      })
 
-      // @ts-expect-error: spying on private property
-      const validateClientSuppliedValueMock = jest.spyOn(characteristic, "validateClientSuppliedValue");
+      const validateClientSuppliedValueMock = vi.spyOn(characteristic, 'validateClientSuppliedValue')
 
       // set initial known good value
-      characteristic.setValue("abcde");
+      characteristic.setValue('abcde')
 
       // should reject strings that are to long
-      await expect(characteristic.handleSetRequest("this is to long", null as unknown as undefined))
-        .rejects.toEqual(HAPStatus.INVALID_VALUE_IN_REQUEST);
+      await expect(characteristic.handleSetRequest('this is to long', null as unknown as undefined))
+        .rejects
+        .toEqual(HAPStatus.INVALID_VALUE_IN_REQUEST)
 
       // the existing valid value should remain
-      expect(characteristic.value).toEqual("abcde");
+      expect(characteristic.value).toEqual('abcde')
 
       // strings should pass
-      await expect(characteristic.handleSetRequest("abc", null as unknown as undefined))
-        .resolves.toEqual(undefined);
+      await expect(characteristic.handleSetRequest('abc', null as unknown as undefined))
+        .resolves
+        .toEqual(undefined)
 
       // value should now be updated
-      expect(characteristic.value).toEqual("abc");
+      expect(characteristic.value).toEqual('abc')
 
       // ensure validator was actually called
-      expect(validateClientSuppliedValueMock).toHaveBeenCalledTimes(2);
-    });
+      expect(validateClientSuppliedValueMock).toHaveBeenCalledTimes(2)
+    })
+  })
 
-  });
-
-  describe("#validateUserInput()", () => {
-
-    it("should validate an integer property", () => {
-      const VALUE = 1024;
-      const characteristic = createCharacteristic(Formats.INT);
+  describe('#validateUserInput()', () => {
+    it('should validate an integer property', () => {
+      const VALUE = 1024
+      const characteristic = createCharacteristic(Formats.INT)
       // @ts-expect-error: private access
-      expect(characteristic.validateUserInput(VALUE)).toEqual(VALUE);
-    });
+      expect(characteristic.validateUserInput(VALUE)).toEqual(VALUE)
+    })
 
-    it("should validate a float property", () => {
-      const VALUE = 1.024;
+    it('should validate a float property', () => {
+      const VALUE = 1.024
       const characteristic = createCharacteristicWithProps({
         format: Formats.FLOAT,
         minStep: 0.001,
         minValue: 0,
         perms: [Perms.NOTIFY],
-      });
+      })
       // @ts-expect-error: private access
-      expect(characteristic.validateUserInput(VALUE)).toEqual(VALUE);
-    });
+      expect(characteristic.validateUserInput(VALUE)).toEqual(VALUE)
+    })
 
-    it("should validate a UINT8 property", () => {
-      const VALUE = 10;
-      const characteristic = createCharacteristic(Formats.UINT8);
+    it('should validate a UINT8 property', () => {
+      const VALUE = 10
+      const characteristic = createCharacteristic(Formats.UINT8)
       // @ts-expect-error: private access
-      expect(characteristic.validateUserInput(VALUE)).toEqual(VALUE);
-    });
+      expect(characteristic.validateUserInput(VALUE)).toEqual(VALUE)
+    })
 
-    it("should validate a UINT16 property", () => {
-      const VALUE = 10;
-      const characteristic = createCharacteristic(Formats.UINT16);
+    it('should validate a UINT16 property', () => {
+      const VALUE = 10
+      const characteristic = createCharacteristic(Formats.UINT16)
       // @ts-expect-error: private access
-      expect(characteristic.validateUserInput(VALUE)).toEqual(VALUE);
-    });
+      expect(characteristic.validateUserInput(VALUE)).toEqual(VALUE)
+    })
 
-    it("should validate a UINT32 property", () => {
-      const VALUE = 10;
-      const characteristic = createCharacteristic(Formats.UINT32);
+    it('should validate a UINT32 property', () => {
+      const VALUE = 10
+      const characteristic = createCharacteristic(Formats.UINT32)
       // @ts-expect-error: private access
-      expect(characteristic.validateUserInput(VALUE)).toEqual(VALUE);
-    });
+      expect(characteristic.validateUserInput(VALUE)).toEqual(VALUE)
+    })
 
-    it("should validate a UINT64 property", () => {
-      const VALUE = 10;
-      const characteristic = createCharacteristic(Formats.UINT64);
+    it('should validate a UINT64 property', () => {
+      const VALUE = 10
+      const characteristic = createCharacteristic(Formats.UINT64)
       // @ts-expect-error: private access
-      expect(characteristic.validateUserInput(VALUE)).toEqual(VALUE);
-    });
+      expect(characteristic.validateUserInput(VALUE)).toEqual(VALUE)
+    })
 
-    it("should validate a boolean property", () => {
-      const VALUE = true;
-      const characteristic = createCharacteristic(Formats.BOOL);
+    it('should validate a boolean property', () => {
+      const VALUE = true
+      const characteristic = createCharacteristic(Formats.BOOL)
       // @ts-expect-error: private access
-      expect(characteristic.validateUserInput(VALUE)).toEqual(VALUE);
-    });
+      expect(characteristic.validateUserInput(VALUE)).toEqual(VALUE)
+    })
 
-    it("should validate a string property", () => {
-      const VALUE = "Test";
-      const characteristic = createCharacteristic(Formats.STRING);
+    it('should validate a string property', () => {
+      const VALUE = 'Test'
+      const characteristic = createCharacteristic(Formats.STRING)
       // @ts-expect-error: private access
-      expect(characteristic.validateUserInput(VALUE)).toEqual(VALUE);
-    });
+      expect(characteristic.validateUserInput(VALUE)).toEqual(VALUE)
+    })
 
-    it("should validate a data property", () => {
-      const VALUE = Buffer.from("Hello my good friend. Have a nice day!", "ascii").toString("base64");
-      const characteristic = createCharacteristic(Formats.DATA);
+    it('should validate a data property', () => {
+      const VALUE = Buffer.from('Hello my good friend. Have a nice day!', 'ascii').toString('base64')
+      const characteristic = createCharacteristic(Formats.DATA)
       // @ts-expect-error: private access
-      expect(characteristic.validateUserInput(VALUE)).toEqual(VALUE);
-    });
+      expect(characteristic.validateUserInput(VALUE)).toEqual(VALUE)
+    })
 
-    it("should validate a TLV8 property", () => {
-      const VALUE = "";
-      const characteristic = createCharacteristic(Formats.TLV8);
+    it('should validate a TLV8 property', () => {
+      const VALUE = ''
+      const characteristic = createCharacteristic(Formats.TLV8)
       // @ts-expect-error: private access
-      expect(characteristic.validateUserInput(VALUE)).toEqual(VALUE);
-    });
+      expect(characteristic.validateUserInput(VALUE)).toEqual(VALUE)
+    })
 
-    it("should validate boolean inputs", () => {
+    it('should validate boolean inputs', () => {
       const characteristic = createCharacteristicWithProps({
         format: Formats.BOOL,
         perms: [Perms.PAIRED_READ, Perms.PAIRED_WRITE],
-      });
+      })
 
-      // @ts-expect-error: spying on private property
-      const mock = jest.spyOn(characteristic, "characteristicWarning");
+      const mock = vi.spyOn(characteristic, 'characteristicWarning')
 
-      characteristic.setValue(true);
-      expect(characteristic.value).toEqual(true);
+      characteristic.setValue(true)
+      expect(characteristic.value).toEqual(true)
 
-      characteristic.setValue(false);
-      expect(characteristic.value).toEqual(false);
+      characteristic.setValue(false)
+      expect(characteristic.value).toEqual(false)
 
-      characteristic.setValue(1);
-      expect(characteristic.value).toEqual(true);
+      characteristic.setValue(1)
+      expect(characteristic.value).toEqual(true)
 
-      characteristic.setValue(0);
-      expect(characteristic.value).toEqual(false);
+      characteristic.setValue(0)
+      expect(characteristic.value).toEqual(false)
 
-      characteristic.setValue("1");
-      expect(characteristic.value).toEqual(true);
+      characteristic.setValue('1')
+      expect(characteristic.value).toEqual(true)
 
-      characteristic.setValue("true");
-      expect(characteristic.value).toEqual(true);
+      characteristic.setValue('true')
+      expect(characteristic.value).toEqual(true)
 
-      characteristic.setValue("0");
-      expect(characteristic.value).toEqual(false);
+      characteristic.setValue('0')
+      expect(characteristic.value).toEqual(false)
 
-      characteristic.setValue("false");
-      expect(characteristic.value).toEqual(false);
+      characteristic.setValue('false')
+      expect(characteristic.value).toEqual(false)
 
-      characteristic.setValue({ some: "object" });
-      expect(characteristic.value).toEqual(false);
-      expect(mock).toHaveBeenCalledTimes(1);
-    });
+      characteristic.setValue({ some: 'object' })
+      expect(characteristic.value).toEqual(false)
+      expect(mock).toHaveBeenCalledTimes(1)
+    })
 
-    it("should validate boolean inputs when value is undefined", () => {
+    it('should validate boolean inputs when value is undefined', () => {
       const characteristic = createCharacteristicWithProps({
         format: Formats.BOOL,
         perms: [Perms.PAIRED_READ, Perms.PAIRED_WRITE],
-      });
+      })
 
-      // @ts-expect-error: spying on private property
-      const mock = jest.spyOn(characteristic, "characteristicWarning");
+      const mock = vi.spyOn(characteristic, 'characteristicWarning')
 
-      characteristic.setValue(undefined as unknown as boolean);
-      expect(characteristic.value).toEqual(false);
-      expect(mock).toHaveBeenCalledTimes(1);
-    });
+      characteristic.setValue(undefined as unknown as boolean)
+      expect(characteristic.value).toEqual(false)
+      expect(mock).toHaveBeenCalledTimes(1)
+    })
 
-    test.each([Formats.INT, Formats.FLOAT, Formats.UINT8, Formats.UINT16, Formats.UINT32, Formats.UINT64])(
-      "should validate %p inputs", (intType) => {
+    it.each([
+      Formats.INT,
+      Formats.FLOAT,
+      Formats.UINT8,
+      Formats.UINT16,
+      Formats.UINT32,
+      Formats.UINT64,
+    ])(
+      'should validate %p inputs', (intType) => {
         const characteristic = createCharacteristicWithProps({
           format: intType,
           perms: [Perms.PAIRED_READ, Perms.PAIRED_WRITE],
           minValue: 0,
           maxValue: 100,
-        });
+        })
 
-        // @ts-expect-error: spying on private property
-        const mock = jest.spyOn(characteristic, "characteristicWarning");
+        const mock = vi.spyOn(characteristic, 'characteristicWarning')
 
-        characteristic.setValue(1);
-        expect(characteristic.value).toEqual(1);
-
-        // round to nearest valid value, trigger warning
-        mock.mockReset();
-        characteristic.setValue(-100);
-        expect(characteristic.value).toEqual(0);
-        expect(mock).toHaveBeenCalledTimes(1);
+        characteristic.setValue(1)
+        expect(characteristic.value).toEqual(1)
 
         // round to nearest valid value, trigger warning
-        mock.mockReset();
-        characteristic.setValue(200);
-        expect(characteristic.value).toEqual(100);
-        expect(mock).toHaveBeenCalledTimes(1);
+        mock.mockReset()
+        characteristic.setValue(-100)
+        expect(characteristic.value).toEqual(0)
+        expect(mock).toHaveBeenCalledTimes(1)
+
+        // round to nearest valid value, trigger warning
+        mock.mockReset()
+        characteristic.setValue(200)
+        expect(characteristic.value).toEqual(100)
+        expect(mock).toHaveBeenCalledTimes(1)
 
         // parse string
-        mock.mockReset();
-        characteristic.setValue("50");
-        expect(characteristic.value).toEqual(50);
-        expect(mock).toHaveBeenCalledTimes(0);
+        mock.mockReset()
+        characteristic.setValue('50')
+        expect(characteristic.value).toEqual(50)
+        expect(mock).toHaveBeenCalledTimes(0)
 
         // handle NaN from non-numeric string, restore last known value, trigger warning
-        mock.mockReset();
-        characteristic.setValue(50);
-        characteristic.setValue("SOME STRING");
-        expect(characteristic.value).toEqual(50);
-        expect(mock).toHaveBeenCalledTimes(1);
-        expect(mock).toHaveBeenCalledWith("characteristic value expected valid finite number and received \"NaN\" (number)", "warn-message");
+        mock.mockReset()
+        characteristic.setValue(50)
+        characteristic.setValue('SOME STRING')
+        expect(characteristic.value).toEqual(50)
+        expect(mock).toHaveBeenCalledTimes(1)
+        expect(mock).toHaveBeenCalledWith('characteristic value expected valid finite number and received "NaN" (number)', 'warn-message')
 
         // handle NaN: number from number value
-        mock.mockReset();
-        characteristic.setValue(50);
-        characteristic.setValue(NaN);
-        expect(characteristic.value).toEqual(50);
-        expect(mock).toHaveBeenCalledTimes(1);
-        expect(mock).toHaveBeenCalledWith("characteristic value expected valid finite number and received \"NaN\" (number)", "warn-message");
+        mock.mockReset()
+        characteristic.setValue(50)
+        characteristic.setValue(NaN)
+        expect(characteristic.value).toEqual(50)
+        expect(mock).toHaveBeenCalledTimes(1)
+        expect(mock).toHaveBeenCalledWith('characteristic value expected valid finite number and received "NaN" (number)', 'warn-message')
 
         // handle object, restore last known value, trigger warning
-        mock.mockReset();
-        characteristic.setValue(50);
-        characteristic.setValue({ some: "object" });
-        expect(characteristic.value).toEqual(50);
-        expect(mock).toHaveBeenCalledTimes(1);
+        mock.mockReset()
+        characteristic.setValue(50)
+        characteristic.setValue({ some: 'object' })
+        expect(characteristic.value).toEqual(50)
+        expect(mock).toHaveBeenCalledTimes(1)
 
         // handle boolean - true -> 1
-        mock.mockReset();
-        characteristic.setValue(true);
-        expect(characteristic.value).toEqual(1);
-        expect(mock).toHaveBeenCalledTimes(0);
+        mock.mockReset()
+        characteristic.setValue(true)
+        expect(characteristic.value).toEqual(1)
+        expect(mock).toHaveBeenCalledTimes(0)
 
         // handle boolean - false -> 0
-        mock.mockReset();
-        characteristic.setValue(false);
-        expect(characteristic.value).toEqual(0);
-        expect(mock).toHaveBeenCalledTimes(0);
+        mock.mockReset()
+        characteristic.setValue(false)
+        expect(characteristic.value).toEqual(0)
+        expect(mock).toHaveBeenCalledTimes(0)
       },
-    );
+    )
 
-    test.each([Formats.INT, Formats.FLOAT, Formats.UINT8, Formats.UINT16, Formats.UINT32, Formats.UINT64])(
-      "should validate %p inputs when value is undefined", (intType) => {
+    it.each([
+      Formats.INT,
+      Formats.FLOAT,
+      Formats.UINT8,
+      Formats.UINT16,
+      Formats.UINT32,
+      Formats.UINT64,
+    ])(
+      'should validate %p inputs when value is undefined', (intType) => {
         const characteristic = createCharacteristicWithProps({
           format: intType,
           perms: [Perms.PAIRED_READ, Perms.PAIRED_WRITE],
           minValue: 0,
           maxValue: 100,
-        });
+        })
 
-        // @ts-expect-error: spying on private property
-        const mock = jest.spyOn(characteristic, "characteristicWarning");
+        const mock = vi.spyOn(characteristic, 'characteristicWarning')
 
         // undefined values should be set to the minValue if not yet set
-        mock.mockReset();
-        characteristic.setValue(undefined as unknown as boolean);
-        expect(characteristic.value).toEqual(0);
-        expect(mock).toHaveBeenCalledTimes(1);
+        mock.mockReset()
+        characteristic.setValue(undefined as unknown as boolean)
+        expect(characteristic.value).toEqual(0)
+        expect(mock).toHaveBeenCalledTimes(1)
 
         // undefined values should be set to the existing value if set
-        mock.mockReset();
-        characteristic.setValue(50);
-        characteristic.setValue(undefined as unknown as boolean);
-        expect(characteristic.value).toEqual(50);
-        expect(mock).toHaveBeenCalledTimes(1);
+        mock.mockReset()
+        characteristic.setValue(50)
+        characteristic.setValue(undefined as unknown as boolean)
+        expect(characteristic.value).toEqual(50)
+        expect(mock).toHaveBeenCalledTimes(1)
       },
-    );
+    )
 
-    test.each([Formats.INT, Formats.UINT8, Formats.UINT16, Formats.UINT32, Formats.UINT64])(
-      "should round when a float is provided for %p inputs", (intType) => {
+    it.each([
+      Formats.INT,
+      Formats.UINT8,
+      Formats.UINT16,
+      Formats.UINT32,
+      Formats.UINT64,
+    ])(
+      'should round when a float is provided for %p inputs', (intType) => {
         const characteristic = createCharacteristicWithProps({
           format: intType,
           perms: [Perms.PAIRED_READ, Perms.PAIRED_WRITE],
           minValue: 0,
           maxValue: 100,
-        });
+        })
 
-        characteristic.setValue(99.5);
-        expect(characteristic.value).toEqual(100);
+        characteristic.setValue(99.5)
+        expect(characteristic.value).toEqual(100)
 
-        characteristic.setValue(0.1);
-        expect(characteristic.value).toEqual(0);
+        characteristic.setValue(0.1)
+        expect(characteristic.value).toEqual(0)
       },
-    );
+    )
 
-    it("should adjust maxValue based on minStep", () => {
+    it('should adjust maxValue based on minStep', () => {
       const characteristic = createCharacteristicWithProps({
         format: Formats.INT,
         minValue: 0,
         maxValue: 25,
         minStep: 2,
         perms: [Perms.PAIRED_READ, Perms.PAIRED_WRITE],
-      });
+      })
 
       // @ts-expect-error: private access
-      const adjustedMaxValue = characteristic.validateUserInput(25);
-      expect(adjustedMaxValue).toEqual(24); // maxValue should be adjusted to 24
-    });
+      const adjustedMaxValue = characteristic.validateUserInput(25)
+      expect(adjustedMaxValue).toEqual(24) // maxValue should be adjusted to 24
+    })
 
-    it("should quantize values based on minStep", () => {
+    it('should quantize values based on minStep', () => {
       const characteristic = createCharacteristicWithProps({
         format: Formats.INT,
         minValue: 0,
         maxValue: 25,
         minStep: 2,
         perms: [Perms.PAIRED_READ, Perms.PAIRED_WRITE],
-      });
+      })
 
       // @ts-expect-error: private access
-      const quantizedValue = characteristic.validateUserInput(23);
-      expect(quantizedValue).toEqual(24); // value should be quantized to 24
-    });
+      const quantizedValue = characteristic.validateUserInput(23)
+      expect(quantizedValue).toEqual(24) // value should be quantized to 24
+    })
 
-    it("should truncate values to minValue", () => {
+    it('should truncate values to minValue', () => {
       const characteristic = createCharacteristicWithProps({
         format: Formats.INT,
         minValue: 10,
         maxValue: 25,
         minStep: 2,
         perms: [Perms.PAIRED_READ, Perms.PAIRED_WRITE],
-      });
+      })
 
       // @ts-expect-error: private access
-      const truncatedValue = characteristic.validateUserInput(5);
-      expect(truncatedValue).toEqual(10); // value should be truncated to minValue 10
-    });
+      const truncatedValue = characteristic.validateUserInput(5)
+      expect(truncatedValue).toEqual(10) // value should be truncated to minValue 10
+    })
 
-    it("should truncate values to maxValue", () => {
+    it('should truncate values to maxValue', () => {
       const characteristic = createCharacteristicWithProps({
         format: Formats.INT,
         minValue: 0,
         maxValue: 25,
         minStep: 2,
         perms: [Perms.PAIRED_READ, Perms.PAIRED_WRITE],
-      });
+      })
 
       // @ts-expect-error: private access
-      const truncatedValue = characteristic.validateUserInput(30);
-      expect(truncatedValue).toEqual(24); // value should be truncated to adjusted maxValue 24
-    });
+      const truncatedValue = characteristic.validateUserInput(30)
+      expect(truncatedValue).toEqual(24) // value should be truncated to adjusted maxValue 24
+    })
 
-    it("should not round floats for Formats.FLOAT", () => {
+    it('should not round floats for Formats.FLOAT', () => {
       const characteristic = createCharacteristicWithProps({
         format: Formats.FLOAT,
         perms: [Perms.PAIRED_READ, Perms.PAIRED_WRITE],
         minValue: 0,
         maxValue: 100,
-      });
+      })
 
-      characteristic.setValue(99.5);
-      expect(characteristic.value).toEqual(99.5);
+      characteristic.setValue(99.5)
+      expect(characteristic.value).toEqual(99.5)
 
-      characteristic.setValue(0.1);
-      expect(characteristic.value).toEqual(0.1);
-    });
+      characteristic.setValue(0.1)
+      expect(characteristic.value).toEqual(0.1)
+    })
 
-    it("should accept Formats.FLOAT with non-defined min/max value", () => {
+    it('should accept Formats.FLOAT with non-defined min/max value', () => {
       const characteristic = createCharacteristicWithProps({
         format: Formats.FLOAT,
         minStep: 0.01,
         perms: [Perms.PAIRED_READ, Perms.NOTIFY],
-      }, uuid.generate("051"));
+      }, uuid.generate('051'))
 
-      // @ts-expect-error - spying on private property
-      const mock = jest.spyOn(characteristic, "characteristicWarning");
+      const mock = vi.spyOn(characteristic, 'characteristicWarning')
 
-      mock.mockReset();
-      characteristic.updateValue(0.09);
-      expect(characteristic.value).toEqual(0.09);
-      expect(mock).toHaveBeenCalledTimes(0);
-    });
+      mock.mockReset()
+      characteristic.updateValue(0.09)
+      expect(characteristic.value).toEqual(0.09)
+      expect(mock).toHaveBeenCalledTimes(0)
+    })
 
-    it("should validate Formats.FLOAT with precision", () => {
-      const characteristic = new Characteristic.CurrentAmbientLightLevel();
+    it('should validate Formats.FLOAT with precision', () => {
+      const characteristic = new Characteristic.CurrentAmbientLightLevel()
 
-      // @ts-expect-error - spying on private property
-      const mock = jest.spyOn(characteristic, "characteristicWarning");
+      const mock = vi.spyOn(characteristic, 'characteristicWarning')
 
-      mock.mockReset();
-      characteristic.setValue(0);
-      expect(characteristic.value).toEqual(0.0001);
-      expect(mock).toHaveBeenCalledTimes(1);
+      mock.mockReset()
+      characteristic.setValue(0)
+      expect(characteristic.value).toEqual(0.0001)
+      expect(mock).toHaveBeenCalledTimes(1)
 
-      mock.mockReset();
-      characteristic.setValue(0.0001);
-      expect(characteristic.value).toEqual(0.0001);
-      expect(mock).toHaveBeenCalledTimes(0);
+      mock.mockReset()
+      characteristic.setValue(0.0001)
+      expect(characteristic.value).toEqual(0.0001)
+      expect(mock).toHaveBeenCalledTimes(0)
 
-      mock.mockReset();
-      characteristic.setValue("0.0001");
-      expect(characteristic.value).toEqual(0.0001);
-      expect(mock).toHaveBeenCalledTimes(0);
+      mock.mockReset()
+      characteristic.setValue('0.0001')
+      expect(characteristic.value).toEqual(0.0001)
+      expect(mock).toHaveBeenCalledTimes(0)
 
-      mock.mockReset();
-      characteristic.setValue(100000.00000001);
-      expect(characteristic.value).toEqual(100000);
-      expect(mock).toHaveBeenCalledTimes(1);
+      mock.mockReset()
+      characteristic.setValue(100000.00000001)
+      expect(characteristic.value).toEqual(100000)
+      expect(mock).toHaveBeenCalledTimes(1)
 
-      mock.mockReset();
-      characteristic.setValue(100000);
-      expect(characteristic.value).toEqual(100000);
-      expect(mock).toHaveBeenCalledTimes(0);
-    });
+      mock.mockReset()
+      characteristic.setValue(100000)
+      expect(characteristic.value).toEqual(100000)
+      expect(mock).toHaveBeenCalledTimes(0)
+    })
 
-    it("should validate Formats.FLOAT with precision with minimum steps", () => {
-      const characteristic = createCharacteristic(Formats.FLOAT);
-      let minStep;
+    it('should validate Formats.FLOAT with precision with minimum steps', () => {
+      const characteristic = createCharacteristic(Formats.FLOAT)
+      let minStep
 
-      minStep = 100 / 6;
+      minStep = 100 / 6
       characteristic.setProps({
         minValue: 0,
         maxValue: 100,
-        minStep: minStep,
-      });
-      for(let i = 1; i <= 7; i++) {
-        const desiredValue = Math.min(Math.max(i * minStep, 0), 100);
-        characteristic.setValue(i * minStep);
-        expect(characteristic.value).toEqual(desiredValue);
+        minStep,
+      })
+      for (let i = 1; i <= 7; i++) {
+        const desiredValue = Math.min(Math.max(i * minStep, 0), 100)
+        characteristic.setValue(i * minStep)
+        expect(characteristic.value).toEqual(desiredValue)
       }
 
-      minStep = 1;
+      minStep = 1
       characteristic.setProps({
         minValue: 0.5,
         maxValue: 2.5,
-        minStep: minStep,
-      });
-      for(let i = 1; i <= 4; i++) {
-        const desiredValue = Math.min(Math.max(i * minStep + 0.5, 0.5), 2.5);
-        characteristic.setValue(i * minStep + 0.5);
-        expect(characteristic.value).toEqual(desiredValue);
+        minStep,
+      })
+      for (let i = 1; i <= 4; i++) {
+        const desiredValue = Math.min(Math.max(i * minStep + 0.5, 0.5), 2.5)
+        characteristic.setValue(i * minStep + 0.5)
+        expect(characteristic.value).toEqual(desiredValue)
       }
 
-      minStep = 100 / 3;
+      minStep = 100 / 3
       characteristic.setProps({
         minValue: 0,
         maxValue: 100,
-        minStep: minStep,
-      });
-      for(let i = 1; i <= 4; i++) {
-        const desiredValue = Math.min(Math.max(i * minStep, 0), 100);
-        characteristic.setValue(i * minStep);
-        expect(characteristic.value).toEqual(desiredValue);
+        minStep,
+      })
+      for (let i = 1; i <= 4; i++) {
+        const desiredValue = Math.min(Math.max(i * minStep, 0), 100)
+        characteristic.setValue(i * minStep)
+        expect(characteristic.value).toEqual(desiredValue)
       }
-    });
+    })
 
-    it("should allow negative floats in range for Formats.FLOAT", () => {
+    it('should allow negative floats in range for Formats.FLOAT', () => {
       const characteristic = createCharacteristicWithProps({
         format: Formats.FLOAT,
         perms: [Perms.PAIRED_READ, Perms.PAIRED_WRITE],
         minValue: -1000,
         maxValue: 1000,
-      });
+      })
 
-      // @ts-expect-error - spying on private property
-      const mock = jest.spyOn(characteristic, "characteristicWarning");
+      const mock = vi.spyOn(characteristic, 'characteristicWarning')
 
-      mock.mockReset();
-      characteristic.setValue(-0.013);
-      expect(characteristic.value).toEqual(-0.013);
-      expect(mock).toHaveBeenCalledTimes(0);
-    });
+      mock.mockReset()
+      characteristic.setValue(-0.013)
+      expect(characteristic.value).toEqual(-0.013)
+      expect(mock).toHaveBeenCalledTimes(0)
+    })
 
-    it("should not allow non-finite floats in range for Formats.FLOAT", () => {
+    it('should not allow non-finite floats in range for Formats.FLOAT', () => {
       const characteristic = createCharacteristicWithProps({
         format: Formats.FLOAT,
         perms: [Perms.PAIRED_READ, Perms.PAIRED_WRITE],
-      });
+      })
 
-      // @ts-expect-error - spying on private property
-      const mock = jest.spyOn(characteristic, "characteristicWarning");
+      const mock = vi.spyOn(characteristic, 'characteristicWarning')
 
-      mock.mockReset();
-      characteristic.setValue(Infinity);
-      expect(characteristic.value).toEqual(0);
-      expect(mock).toHaveBeenCalledTimes(1);
+      mock.mockReset()
+      characteristic.setValue(Infinity)
+      expect(characteristic.value).toEqual(0)
+      expect(mock).toHaveBeenCalledTimes(1)
 
-      mock.mockReset();
-      characteristic.setValue(Number.POSITIVE_INFINITY);
-      expect(characteristic.value).toEqual(0);
-      expect(mock).toHaveBeenCalledTimes(1);
+      mock.mockReset()
+      characteristic.setValue(Number.POSITIVE_INFINITY)
+      expect(characteristic.value).toEqual(0)
+      expect(mock).toHaveBeenCalledTimes(1)
 
-      mock.mockReset();
-      characteristic.setValue(Number.NEGATIVE_INFINITY);
-      expect(characteristic.value).toEqual(0);
-      expect(mock).toHaveBeenCalledTimes(1);
-    });
+      mock.mockReset()
+      characteristic.setValue(Number.NEGATIVE_INFINITY)
+      expect(characteristic.value).toEqual(0)
+      expect(mock).toHaveBeenCalledTimes(1)
+    })
 
-    it("should validate string inputs", () => {
+    it('should validate string inputs', () => {
       const characteristic = createCharacteristicWithProps({
         format: Formats.STRING,
         perms: [Perms.PAIRED_READ, Perms.PAIRED_WRITE],
         maxLen: 15,
-      });
+      })
 
-      // @ts-expect-error: spying on private property
-      const mock = jest.spyOn(characteristic, "characteristicWarning");
+      const mock = vi.spyOn(characteristic, 'characteristicWarning')
 
       // valid string
-      mock.mockReset();
-      characteristic.setValue("ok string");
-      expect(characteristic.value).toEqual("ok string");
-      expect(mock).toHaveBeenCalledTimes(0);
+      mock.mockReset()
+      characteristic.setValue('ok string')
+      expect(characteristic.value).toEqual('ok string')
+      expect(mock).toHaveBeenCalledTimes(0)
 
       // number - convert to string - trigger warning
-      mock.mockReset();
-      characteristic.setValue(12345);
-      expect(characteristic.value).toEqual("12345");
-      expect(mock).toHaveBeenCalledTimes(1);
+      mock.mockReset()
+      characteristic.setValue(12345)
+      expect(characteristic.value).toEqual('12345')
+      expect(mock).toHaveBeenCalledTimes(1)
 
       // not a string or number, use last known good value and trigger warning
-      mock.mockReset();
-      characteristic.setValue("ok string");
-      characteristic.setValue({ ok: "an object" });
-      expect(characteristic.value).toEqual("ok string");
-      expect(mock).toHaveBeenCalledTimes(1);
+      mock.mockReset()
+      characteristic.setValue('ok string')
+      characteristic.setValue({ ok: 'an object' })
+      expect(characteristic.value).toEqual('ok string')
+      expect(mock).toHaveBeenCalledTimes(1)
 
       // max length exceeded
-      mock.mockReset();
-      characteristic.setValue("this string exceeds the max length allowed");
-      expect(characteristic.value).toEqual("this string exc");
-      expect(mock).toHaveBeenCalledTimes(1);
-    });
+      mock.mockReset()
+      characteristic.setValue('this string exceeds the max length allowed')
+      expect(characteristic.value).toEqual('this string exc')
+      expect(mock).toHaveBeenCalledTimes(1)
+    })
 
-    it("should validate string inputs when undefined", () => {
+    it('should validate string inputs when undefined', () => {
       const characteristic = createCharacteristicWithProps({
         format: Formats.STRING,
         perms: [Perms.PAIRED_READ, Perms.PAIRED_WRITE],
         maxLen: 15,
-      });
+      })
 
-      // @ts-expect-error: spying on private property
-      const mock = jest.spyOn(characteristic, "characteristicWarning");
+      const mock = vi.spyOn(characteristic, 'characteristicWarning')
 
       // undefined values should be set to "undefined" of no valid value is set yet
-      mock.mockReset();
-      characteristic.setValue(undefined as unknown as boolean);
-      expect(characteristic.value).toEqual("undefined");
-      expect(mock).toHaveBeenCalledTimes(1);
+      mock.mockReset()
+      characteristic.setValue(undefined as unknown as boolean)
+      expect(characteristic.value).toEqual('undefined')
+      expect(mock).toHaveBeenCalledTimes(1)
 
       // undefined values should revert back to last known good value if set
-      mock.mockReset();
-      characteristic.setValue("ok string");
-      characteristic.setValue(undefined as unknown as boolean);
-      expect(characteristic.value).toEqual("ok string");
-      expect(mock).toHaveBeenCalledTimes(1);
-    });
+      mock.mockReset()
+      characteristic.setValue('ok string')
+      characteristic.setValue(undefined as unknown as boolean)
+      expect(characteristic.value).toEqual('ok string')
+      expect(mock).toHaveBeenCalledTimes(1)
+    })
 
-    it("should validate data type inputs", () => {
+    it('should validate data type inputs', () => {
       const characteristic = createCharacteristicWithProps({
         format: Formats.DATA,
         perms: [Perms.PAIRED_READ, Perms.PAIRED_WRITE],
         maxDataLen: 15,
-      });
+      })
 
-      // @ts-expect-error: spying on private property
-      const mock = jest.spyOn(characteristic, "characteristicWarning");
+      const mock = vi.spyOn(characteristic, 'characteristicWarning')
 
       // valid data
-      mock.mockReset();
-      characteristic.setValue("some data");
-      expect(characteristic.value).toEqual("some data");
-      expect(mock).toHaveBeenCalledTimes(0);
+      mock.mockReset()
+      characteristic.setValue('some data')
+      expect(characteristic.value).toEqual('some data')
+      expect(mock).toHaveBeenCalledTimes(0)
 
       // not valid data
-      mock.mockReset();
-      characteristic.setValue({ some: "data" });
-      expect(mock).toHaveBeenCalledTimes(1);
+      mock.mockReset()
+      characteristic.setValue({ some: 'data' })
+      expect(mock).toHaveBeenCalledTimes(1)
 
       // max length exceeded
-      mock.mockReset();
-      characteristic.setValue("this string exceeds the max length allowed");
-      expect(mock).toHaveBeenCalledTimes(1);
-    });
+      mock.mockReset()
+      characteristic.setValue('this string exceeds the max length allowed')
+      expect(mock).toHaveBeenCalledTimes(1)
+    })
 
-    it("should handle null inputs correctly for scalar Apple characteristics", () => {
-      const characteristic = new Characteristic("CurrentTemperature", Characteristic.CurrentTemperature.UUID, {
+    it('should handle null inputs correctly for scalar Apple characteristics', () => {
+      const characteristic = new Characteristic('CurrentTemperature', Characteristic.CurrentTemperature.UUID, {
         perms: [Perms.PAIRED_READ, Perms.PAIRED_WRITE],
         format: Formats.FLOAT,
         minValue: 0,
         maxValue: 100,
-      });
+      })
 
-      // @ts-expect-error: spying on private property
-      const mock = jest.spyOn(characteristic, "characteristicWarning");
+      const mock = vi.spyOn(characteristic, 'characteristicWarning')
 
       // if the initial value is null, validation should set a valid default
-      mock.mockReset();
-      characteristic.setValue(null as unknown as boolean);
-      expect(characteristic.value).toEqual(0);
-      expect(mock).toHaveBeenCalledTimes(2);
+      mock.mockReset()
+      characteristic.setValue(null as unknown as boolean)
+      expect(characteristic.value).toEqual(0)
+      expect(mock).toHaveBeenCalledTimes(2)
 
       // if the value has been previously set, and null is received, the previous value should be returned,
-      mock.mockReset();
-      characteristic.setValue(50);
-      characteristic.setValue(null as unknown as boolean);
-      expect(characteristic.value).toEqual(50);
-      expect(mock).toHaveBeenCalledTimes(1);
-    });
+      mock.mockReset()
+      characteristic.setValue(50)
+      characteristic.setValue(null as unknown as boolean)
+      expect(characteristic.value).toEqual(50)
+      expect(mock).toHaveBeenCalledTimes(1)
+    })
 
-    it("should handle null inputs correctly for scalar non-scalar Apple characteristics", () => {
-      const characteristicTLV = new SelectedRTPStreamConfiguration();
-      const characteristicData = new Characteristic("Data characteristic", Characteristic.SupportedRTPConfiguration.UUID, {
+    it('should handle null inputs correctly for scalar non-scalar Apple characteristics', () => {
+      const characteristicTLV = new SelectedRTPStreamConfiguration()
+      const characteristicData = new Characteristic('Data characteristic', Characteristic.SupportedRTPConfiguration.UUID, {
         perms: [Perms.PAIRED_READ, Perms.PAIRED_WRITE],
         format: Formats.DATA,
-      });
+      })
 
-      const exampleString = "Example String"; // data and tlv8 are both string based
+      const exampleString = 'Example String' // data and tlv8 are both string based
 
-      // @ts-expect-error: spying on private property
-      const mock = jest.spyOn(characteristicTLV, "characteristicWarning");
+      const mock = vi.spyOn(characteristicTLV, 'characteristicWarning')
 
       // null is a valid value for tlv8 format
-      mock.mockReset();
-      characteristicTLV.setValue(exampleString);
-      expect(characteristicTLV.value).toEqual(exampleString);
-      characteristicTLV.setValue(null as unknown as string);
-      expect(characteristicTLV.value).toEqual(null);
-      expect(mock).toHaveBeenCalledTimes(0);
+      mock.mockReset()
+      characteristicTLV.setValue(exampleString)
+      expect(characteristicTLV.value).toEqual(exampleString)
+      characteristicTLV.setValue(null as unknown as string)
+      expect(characteristicTLV.value).toEqual(null)
+      expect(mock).toHaveBeenCalledTimes(0)
 
       // null is a valid value for data format
-      mock.mockReset();
-      characteristicData.setValue(exampleString);
-      expect(characteristicData.value).toEqual(exampleString);
-      characteristicData.setValue(null as unknown as string);
-      expect(characteristicData.value).toEqual(null);
-      expect(mock).toHaveBeenCalledTimes(0);
-    });
+      mock.mockReset()
+      characteristicData.setValue(exampleString)
+      expect(characteristicData.value).toEqual(exampleString)
+      characteristicData.setValue(null as unknown as string)
+      expect(characteristicData.value).toEqual(null)
+      expect(mock).toHaveBeenCalledTimes(0)
+    })
 
-    it("should handle null inputs correctly for non-Apple characteristics", () => {
+    it('should handle null inputs correctly for non-Apple characteristics', () => {
       const characteristic = createCharacteristicWithProps({
         format: Formats.INT,
         perms: [Perms.PAIRED_READ, Perms.PAIRED_WRITE],
-      });
+      })
 
-      // @ts-expect-error: spying on private property
-      const mock = jest.spyOn(characteristic, "characteristicWarning");
+      const mock = vi.spyOn(characteristic, 'characteristicWarning')
 
       // if the initial value is null, still allow null for non-Apple characteristics
-      mock.mockReset();
-      characteristic.setValue(null as unknown as boolean);
-      expect(characteristic.value).toEqual(null);
-      expect(mock).toHaveBeenCalledTimes(0);
+      mock.mockReset()
+      characteristic.setValue(null as unknown as boolean)
+      expect(characteristic.value).toEqual(null)
+      expect(mock).toHaveBeenCalledTimes(0)
 
       // if the value has been previously set, and null is received, still allow null for non-Apple characteristics
-      mock.mockReset();
-      characteristic.setValue(50);
-      characteristic.setValue(null as unknown as boolean);
-      expect(characteristic.value).toEqual(null);
-      expect(mock).toHaveBeenCalledTimes(0);
-    });
-  });
+      mock.mockReset()
+      characteristic.setValue(50)
+      characteristic.setValue(null as unknown as boolean)
+      expect(characteristic.value).toEqual(null)
+      expect(mock).toHaveBeenCalledTimes(0)
+    })
+  })
 
-  describe("#getDefaultValue()", () => {
-
-    it("should get the correct default value for a boolean property", () => {
-      const characteristic = createCharacteristic(Formats.BOOL);
+  describe('#getDefaultValue()', () => {
+    it('should get the correct default value for a boolean property', () => {
+      const characteristic = createCharacteristic(Formats.BOOL)
       // @ts-expect-error: private access
-      expect(characteristic.getDefaultValue()).toEqual(false);
-    });
+      expect(characteristic.getDefaultValue()).toEqual(false)
+    })
 
-    it("should get the correct default value for a string property", () => {
-      const characteristic = createCharacteristic(Formats.STRING);
+    it('should get the correct default value for a string property', () => {
+      const characteristic = createCharacteristic(Formats.STRING)
       // @ts-expect-error: private access
-      expect(characteristic.getDefaultValue()).toEqual("");
-    });
+      expect(characteristic.getDefaultValue()).toEqual('')
+    })
 
-    it("should get the correct default value for a data property", () => {
-      const characteristic = createCharacteristic(Formats.DATA);
+    it('should get the correct default value for a data property', () => {
+      const characteristic = createCharacteristic(Formats.DATA)
       // @ts-expect-error: private access
-      expect(characteristic.getDefaultValue()).toEqual("");
-    });
+      expect(characteristic.getDefaultValue()).toEqual('')
+    })
 
-    it("should get the correct default value for a TLV8 property", () => {
-      const characteristic = createCharacteristic(Formats.TLV8);
+    it('should get the correct default value for a TLV8 property', () => {
+      const characteristic = createCharacteristic(Formats.TLV8)
       // @ts-expect-error: private access
-      expect(characteristic.getDefaultValue()).toEqual("");
-    });
+      expect(characteristic.getDefaultValue()).toEqual('')
+    })
 
-    it("should get the correct default value a UINT8 property without minValue", () => {
+    it('should get the correct default value a UINT8 property without minValue', () => {
       const characteristic = createCharacteristicWithProps({
         format: Formats.UINT8,
         perms: [Perms.TIMED_WRITE, Perms.PAIRED_READ],
-      });
+      })
       // @ts-expect-error: private access
-      expect(characteristic.getDefaultValue()).toEqual(0);
-      expect(characteristic.value).toEqual(null); // null if never set
-    });
+      expect(characteristic.getDefaultValue()).toEqual(0)
+      expect(characteristic.value).toEqual(null) // null if never set
+    })
 
-    it("should get the correct default value a UINT8 property with minValue", () => {
+    it('should get the correct default value a UINT8 property with minValue', () => {
       const characteristic = createCharacteristicWithProps({
         format: Formats.UINT8,
         perms: [Perms.TIMED_WRITE, Perms.PAIRED_READ],
         minValue: 50,
-      });
+      })
       // @ts-expect-error: private access
-      expect(characteristic.getDefaultValue()).toEqual(50);
-      expect(characteristic.value).toEqual(null); // null if never set
-    });
+      expect(characteristic.getDefaultValue()).toEqual(50)
+      expect(characteristic.value).toEqual(null) // null if never set
+    })
 
-    it("should get the correct default value a INT property without minValue", () => {
+    it('should get the correct default value a INT property without minValue', () => {
       const characteristic = createCharacteristicWithProps({
         format: Formats.INT,
         perms: [Perms.TIMED_WRITE, Perms.PAIRED_READ],
-      });
+      })
       // @ts-expect-error: private access
-      expect(characteristic.getDefaultValue()).toEqual(0);
-      expect(characteristic.value).toEqual(null); // null if never set
-    });
+      expect(characteristic.getDefaultValue()).toEqual(0)
+      expect(characteristic.value).toEqual(null) // null if never set
+    })
 
-    it("should get the correct default value a INT property with minValue", () => {
+    it('should get the correct default value a INT property with minValue', () => {
       const characteristic = createCharacteristicWithProps({
         format: Formats.INT,
         perms: [Perms.TIMED_WRITE, Perms.PAIRED_READ],
         minValue: 50,
-      });
+      })
       // @ts-expect-error: private access
-      expect(characteristic.getDefaultValue()).toEqual(50);
-      expect(characteristic.value).toEqual(null); // null if never set
-    });
+      expect(characteristic.getDefaultValue()).toEqual(50)
+      expect(characteristic.value).toEqual(null) // null if never set
+    })
 
-    it("should get the correct default value for the current temperature characteristic", () => {
-      const characteristic = new Characteristic.CurrentTemperature();
+    it('should get the correct default value for the current temperature characteristic', () => {
+      const characteristic = new Characteristic.CurrentTemperature()
       // @ts-expect-error: private access
-      expect(characteristic.getDefaultValue()).toEqual(0);
-      expect(characteristic.value).toEqual(0);
-    });
+      expect(characteristic.getDefaultValue()).toEqual(0)
+      expect(characteristic.value).toEqual(0)
+    })
 
-    it("should get the default value from the first item in the validValues prop", () => {
+    it('should get the default value from the first item in the validValues prop', () => {
       const characteristic = createCharacteristicWithProps({
         format: Formats.INT,
         perms: [Perms.TIMED_WRITE, Perms.PAIRED_READ],
         validValues: [5, 4, 3, 2],
-      });
+      })
 
       // @ts-expect-error: private access
-      expect(characteristic.getDefaultValue()).toEqual(5);
-      expect(characteristic.value).toEqual(null); // null if never set
-    });
+      expect(characteristic.getDefaultValue()).toEqual(5)
+      expect(characteristic.value).toEqual(null) // null if never set
+    })
 
-    it("should get the default value from minValue prop if set", () => {
+    it('should get the default value from minValue prop if set', () => {
       const characteristic = createCharacteristicWithProps({
         format: Formats.INT,
         perms: [Perms.TIMED_WRITE, Perms.PAIRED_READ],
         minValue: 100,
         maxValue: 255,
-      });
+      })
 
       // @ts-expect-error: private access
-      expect(characteristic.getDefaultValue()).toEqual(100);
-      expect(characteristic.value).toEqual(null); // null if never set
-    });
-
-  });
+      expect(characteristic.getDefaultValue()).toEqual(100)
+      expect(characteristic.value).toEqual(null) // null if never set
+    })
+  })
 
   describe(`@${CharacteristicEventTypes.GET}`, () => {
-    it("should call any listeners for the event", (callback) => {
-      const characteristic = createCharacteristic(Formats.STRING);
+    it('should call any listeners for the event', () => new Promise<void>((callback) => {
+      const characteristic = createCharacteristic(Formats.STRING)
 
-      const listenerCallback = jest.fn();
+      const listenerCallback = vi.fn()
 
       characteristic.handleGetRequest().then(() => {
-        characteristic.on(CharacteristicEventTypes.GET, listenerCallback);
-        characteristic.handleGetRequest();
-        expect(listenerCallback).toHaveBeenCalledTimes(1);
-        callback();
-      });
-    });
+        characteristic.on(CharacteristicEventTypes.GET, listenerCallback)
+        characteristic.handleGetRequest()
+        expect(listenerCallback).toHaveBeenCalledTimes(1)
+        callback()
+      })
+    }))
 
-    it("should handle GET event errors gracefully when using on('get')", async () => {
-      const characteristic = createCharacteristic(Formats.STRING);
+    it('should handle GET event errors gracefully when using on(\'get\')', async () => {
+      const characteristic = createCharacteristic(Formats.STRING)
 
-      // @ts-expect-error: spying on private property
-      const mock = jest.spyOn(characteristic, "characteristicWarning");
+      const mock = vi.spyOn(characteristic, 'characteristicWarning')
 
       // throw HapStatusError - should not trigger characteristic warning
-      mock.mockReset();
-      characteristic.removeAllListeners("get");
-      characteristic.on("get", (callback) => {
-        callback(new HapStatusError(HAPStatus.RESOURCE_BUSY));
-      });
-      await expect(characteristic.handleGetRequest()).rejects.toEqual(HAPStatus.RESOURCE_BUSY);
-      expect(characteristic.statusCode).toEqual(HAPStatus.RESOURCE_BUSY);
-      expect(mock).toHaveBeenCalledTimes(0);
+      mock.mockReset()
+      characteristic.removeAllListeners('get')
+      characteristic.on('get', (callback) => {
+        callback(new HapStatusError(HAPStatus.RESOURCE_BUSY))
+      })
+      await expect(characteristic.handleGetRequest()).rejects.toEqual(HAPStatus.RESOURCE_BUSY)
+      expect(characteristic.statusCode).toEqual(HAPStatus.RESOURCE_BUSY)
+      expect(mock).toHaveBeenCalledTimes(0)
 
       // throw number - should not trigger characteristic warning
-      mock.mockReset();
-      characteristic.removeAllListeners("get");
-      characteristic.on("get", (callback) => {
-        callback(HAPStatus.RESOURCE_BUSY);
-      });
-      await expect(characteristic.handleGetRequest()).rejects.toEqual(HAPStatus.RESOURCE_BUSY);
-      expect(characteristic.statusCode).toEqual(HAPStatus.RESOURCE_BUSY);
-      expect(mock).toHaveBeenCalledTimes(0);
+      mock.mockReset()
+      characteristic.removeAllListeners('get')
+      characteristic.on('get', (callback) => {
+        callback(HAPStatus.RESOURCE_BUSY)
+      })
+      await expect(characteristic.handleGetRequest()).rejects.toEqual(HAPStatus.RESOURCE_BUSY)
+      expect(characteristic.statusCode).toEqual(HAPStatus.RESOURCE_BUSY)
+      expect(mock).toHaveBeenCalledTimes(0)
 
       // throw out of range number - should convert status code to SERVICE_COMMUNICATION_FAILURE
-      mock.mockReset();
-      characteristic.removeAllListeners("get");
-      characteristic.on("get", (callback) => {
-        callback(234234234234 as HAPStatus);
-      });
-      await expect(characteristic.handleGetRequest()).rejects.toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-      expect(characteristic.statusCode).toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-      expect(mock).toHaveBeenCalledTimes(0);
+      mock.mockReset()
+      characteristic.removeAllListeners('get')
+      characteristic.on('get', (callback) => {
+        callback(234234234234 as HAPStatus)
+      })
+      await expect(characteristic.handleGetRequest()).rejects.toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE)
+      expect(characteristic.statusCode).toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE)
+      expect(mock).toHaveBeenCalledTimes(0)
 
       // throw other error - callback style getters should still not trigger warning when error is passed in
-      mock.mockReset();
-      characteristic.removeAllListeners("get");
-      characteristic.on("get", (callback) => {
-        callback(new Error("Something else"));
-      });
-      await expect(characteristic.handleGetRequest()).rejects.toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-      expect(characteristic.statusCode).toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-      expect(mock).toHaveBeenCalledTimes(0);
-    });
-  });
+      mock.mockReset()
+      characteristic.removeAllListeners('get')
+      characteristic.on('get', (callback) => {
+        callback(new Error('Something else'))
+      })
+      await expect(characteristic.handleGetRequest()).rejects.toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE)
+      expect(characteristic.statusCode).toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE)
+      expect(mock).toHaveBeenCalledTimes(0)
+    })
 
-  describe("onGet handler", () => {
-    it("should ignore GET event handler when onGet was specified", async () => {
-      const characteristic = createCharacteristic(Formats.STRING);
+    it('should reject, not throw into the plugin, when a later on(\'get\') callback supplies an illegal value', async () => {
+      const characteristic = createCharacteristicWithProps({
+        format: Formats.DATA,
+        perms: [Perms.PAIRED_READ],
+      })
+      const warning = vi.spyOn(characteristic, 'characteristicWarning')
+      let answer: CharacteristicGetCallback | undefined
+      characteristic.on('get', (callback) => {
+        answer = callback // the plugin answers later, from its own code
+      })
 
-      const listenerCallback = jest.fn().mockImplementation((callback) => {
-        callback(undefined, "OddValue");
-      });
-      const handlerMock = jest.fn();
+      const result = characteristic.handleGetRequest()
+      expect(() => answer!(null, undefined)).not.toThrow()
+      await expect(result).rejects.toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE)
+      expect(characteristic.statusCode).toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE)
+      expect(warning).toHaveBeenCalledWith(expect.stringContaining('An illegal value was supplied by the read handler'),
+        CharacteristicWarningType.WARN_MESSAGE, expect.anything())
+    })
+  })
+
+  describe('onGet handler', () => {
+    it('should ignore GET event handler when onGet was specified', async () => {
+      const characteristic = createCharacteristic(Formats.STRING)
+
+      const listenerCallback = vi.fn().mockImplementation((callback) => {
+        callback(undefined, 'OddValue')
+      })
+      const handlerMock = vi.fn()
 
       characteristic.onGet(() => {
-        handlerMock();
-        return "CurrentValue";
-      });
-      characteristic.on(CharacteristicEventTypes.GET, listenerCallback);
-      const value = await characteristic.handleGetRequest();
+        handlerMock()
+        return 'CurrentValue'
+      })
+      characteristic.on(CharacteristicEventTypes.GET, listenerCallback)
+      const value = await characteristic.handleGetRequest()
 
-      expect(value).toEqual("CurrentValue");
-      expect(handlerMock).toHaveBeenCalledTimes(1);
-      expect(listenerCallback).toHaveBeenCalledTimes(0);
-    });
+      expect(value).toEqual('CurrentValue')
+      expect(handlerMock).toHaveBeenCalledTimes(1)
+      expect(listenerCallback).toHaveBeenCalledTimes(0)
+    })
 
-    it("should handle GET event errors gracefully when using the onGet handler", async () => {
-      const characteristic = createCharacteristic(Formats.STRING);
+    it('should handle GET event errors gracefully when using the onGet handler', async () => {
+      const characteristic = createCharacteristic(Formats.STRING)
 
-      // @ts-expect-error: spying on private property
-      const mock = jest.spyOn(characteristic, "characteristicWarning");
+      const mock = vi.spyOn(characteristic, 'characteristicWarning')
 
       // throw HapStatusError - should not trigger characteristic warning
-      mock.mockReset();
+      mock.mockReset()
       characteristic.onGet(() => {
-        throw new HapStatusError(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-      });
-      await expect(characteristic.handleGetRequest()).rejects.toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-      expect(characteristic.statusCode).toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-      expect(mock).toHaveBeenCalledTimes(0);
+        throw new HapStatusError(HAPStatus.SERVICE_COMMUNICATION_FAILURE)
+      })
+      await expect(characteristic.handleGetRequest()).rejects.toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE)
+      expect(characteristic.statusCode).toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE)
+      expect(mock).toHaveBeenCalledTimes(0)
 
       // throw number - should not trigger characteristic warning
-      mock.mockReset();
+      mock.mockReset()
       characteristic.onGet(() => {
-        throw HAPStatus.SERVICE_COMMUNICATION_FAILURE;
-      });
-      await expect(characteristic.handleGetRequest()).rejects.toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-      expect(characteristic.statusCode).toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-      expect(mock).toHaveBeenCalledTimes(0);
+        throw HAPStatus.SERVICE_COMMUNICATION_FAILURE
+      })
+      await expect(characteristic.handleGetRequest()).rejects.toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE)
+      expect(characteristic.statusCode).toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE)
+      expect(mock).toHaveBeenCalledTimes(0)
 
       // throw out of range number - should convert status code to SERVICE_COMMUNICATION_FAILURE
-      mock.mockReset();
+      mock.mockReset()
       characteristic.onGet(() => {
-        throw 234234234234;
-      });
-      await expect(characteristic.handleGetRequest()).rejects.toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-      expect(characteristic.statusCode).toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-      expect(mock).toHaveBeenCalledTimes(0);
+        // eslint-disable-next-line no-throw-literal -- a plugin throwing something that is not an Error
+        throw 234234234234
+      })
+      await expect(characteristic.handleGetRequest()).rejects.toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE)
+      expect(characteristic.statusCode).toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE)
+      expect(mock).toHaveBeenCalledTimes(0)
 
       // throw other error - should trigger characteristic warning
-      mock.mockReset();
+      mock.mockReset()
       characteristic.onGet(() => {
-        throw new Error("A Random Error");
-      });
-      await expect(characteristic.handleGetRequest()).rejects.toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-      expect(characteristic.statusCode).toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-      expect(mock).toHaveBeenCalledTimes(1);
-    });
-  });
+        throw new Error('A Random Error')
+      })
+      await expect(characteristic.handleGetRequest()).rejects.toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE)
+      expect(characteristic.statusCode).toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE)
+      expect(mock).toHaveBeenCalledTimes(1)
+    })
+  })
 
   describe(`@${CharacteristicEventTypes.SET}`, () => {
-    it("should call any listeners for the event", () => {
-      const characteristic = createCharacteristic(Formats.STRING);
+    it('should call any listeners for the event', () => {
+      const characteristic = createCharacteristic(Formats.STRING)
 
-      const VALUE = "NewValue";
-      const listenerCallback = jest.fn();
+      const VALUE = 'NewValue'
+      const listenerCallback = vi.fn()
 
-      characteristic.handleSetRequest(VALUE);
-      characteristic.on(CharacteristicEventTypes.SET, listenerCallback);
-      characteristic.handleSetRequest(VALUE);
+      characteristic.handleSetRequest(VALUE)
+      characteristic.on(CharacteristicEventTypes.SET, listenerCallback)
+      characteristic.handleSetRequest(VALUE)
 
-      expect(listenerCallback).toHaveBeenCalledTimes(1);
-    });
+      expect(listenerCallback).toHaveBeenCalledTimes(1)
+    })
 
-    it("should handle SET event errors gracefully when using on('set')", async () => {
-      const characteristic = createCharacteristic(Formats.STRING);
+    it('should handle SET event errors gracefully when using on(\'set\')', async () => {
+      const characteristic = createCharacteristic(Formats.STRING)
 
-      // @ts-expect-error: spying on private property
-      const mock = jest.spyOn(characteristic, "characteristicWarning");
+      const mock = vi.spyOn(characteristic, 'characteristicWarning')
 
       // throw HapStatusError - should not trigger characteristic warning
-      mock.mockReset();
-      characteristic.removeAllListeners("set");
-      characteristic.on("set", (value, callback) => {
-        callback(new HapStatusError(HAPStatus.RESOURCE_BUSY));
-      });
-      await expect(characteristic.handleSetRequest("hello")).rejects.toEqual(HAPStatus.RESOURCE_BUSY);
-      expect(characteristic.statusCode).toEqual(HAPStatus.RESOURCE_BUSY);
-      expect(mock).toHaveBeenCalledTimes(0);
+      mock.mockReset()
+      characteristic.removeAllListeners('set')
+      characteristic.on('set', (value, callback) => {
+        callback(new HapStatusError(HAPStatus.RESOURCE_BUSY))
+      })
+      await expect(characteristic.handleSetRequest('hello')).rejects.toEqual(HAPStatus.RESOURCE_BUSY)
+      expect(characteristic.statusCode).toEqual(HAPStatus.RESOURCE_BUSY)
+      expect(mock).toHaveBeenCalledTimes(0)
 
       // throw number - should not trigger characteristic warning
-      mock.mockReset();
-      characteristic.removeAllListeners("set");
-      characteristic.on("set", (value, callback) => {
-        callback(HAPStatus.RESOURCE_BUSY);
-      });
-      await expect(characteristic.handleSetRequest("hello")).rejects.toEqual(HAPStatus.RESOURCE_BUSY);
-      expect(characteristic.statusCode).toEqual(HAPStatus.RESOURCE_BUSY);
-      expect(mock).toHaveBeenCalledTimes(0);
+      mock.mockReset()
+      characteristic.removeAllListeners('set')
+      characteristic.on('set', (value, callback) => {
+        callback(HAPStatus.RESOURCE_BUSY)
+      })
+      await expect(characteristic.handleSetRequest('hello')).rejects.toEqual(HAPStatus.RESOURCE_BUSY)
+      expect(characteristic.statusCode).toEqual(HAPStatus.RESOURCE_BUSY)
+      expect(mock).toHaveBeenCalledTimes(0)
 
       // throw out of range number - should convert status code to SERVICE_COMMUNICATION_FAILURE
-      mock.mockReset();
-      characteristic.removeAllListeners("set");
-      characteristic.on("set", (value, callback) => {
-        callback(234234234234 as HAPStatus);
-      });
-      await expect(characteristic.handleSetRequest("hello")).rejects.toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-      expect(characteristic.statusCode).toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-      expect(mock).toHaveBeenCalledTimes(0);
+      mock.mockReset()
+      characteristic.removeAllListeners('set')
+      characteristic.on('set', (value, callback) => {
+        callback(234234234234 as HAPStatus)
+      })
+      await expect(characteristic.handleSetRequest('hello')).rejects.toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE)
+      expect(characteristic.statusCode).toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE)
+      expect(mock).toHaveBeenCalledTimes(0)
 
       // throw other error - callback style setters should still not trigger warning when error is passed in
-      mock.mockReset();
-      characteristic.removeAllListeners("set");
-      characteristic.on("set", (value, callback) => {
-        callback(new Error("Something else"));
-      });
-      await expect(characteristic.handleSetRequest("hello")).rejects.toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-      expect(characteristic.statusCode).toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-      expect(mock).toHaveBeenCalledTimes(0);
-    });
-  });
+      mock.mockReset()
+      characteristic.removeAllListeners('set')
+      characteristic.on('set', (value, callback) => {
+        callback(new Error('Something else'))
+      })
+      await expect(characteristic.handleSetRequest('hello')).rejects.toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE)
+      expect(characteristic.statusCode).toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE)
+      expect(mock).toHaveBeenCalledTimes(0)
+    })
 
-  describe("onSet handler", () => {
-    it("should ignore SET event handler when onSet was specified", () => {
-      const characteristic = createCharacteristic(Formats.STRING);
+    it('should reject, not throw into the plugin, when a later on(\'set\') callback supplies an illegal write response', async () => {
+      const characteristic = createCharacteristicWithProps({
+        format: Formats.DATA,
+        perms: [Perms.PAIRED_READ, Perms.PAIRED_WRITE, Perms.WRITE_RESPONSE],
+        maxDataLen: 4,
+      })
+      const warning = vi.spyOn(characteristic, 'characteristicWarning')
+      let answer: CharacteristicSetCallback | undefined
+      characteristic.on('set', (value, callback) => {
+        answer = callback // the plugin answers later, from its own code
+      })
 
-      const listenerCallback = jest.fn();
-      const handlerMock = jest.fn();
+      const result = characteristic.handleSetRequest('AA==')
+      await new Promise(resolve => setImmediate(resolve))
+      expect(() => answer!(null, 'AAAAAAAA')).not.toThrow()
+      await expect(result).rejects.toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE)
+      expect(characteristic.statusCode).toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE)
+      expect(warning).toHaveBeenCalledWith(expect.stringContaining('An illegal write response value was supplied by the write handler'),
+        CharacteristicWarningType.WARN_MESSAGE, expect.anything())
+    })
+  })
 
-      characteristic.onSet(value => {
-        handlerMock(value);
-        expect(value).toEqual("NewValue");
-        return;
-      });
-      characteristic.on(CharacteristicEventTypes.SET, listenerCallback);
-      characteristic.handleSetRequest("NewValue");
+  describe('onSet handler', () => {
+    it('should ignore SET event handler when onSet was specified', () => {
+      const characteristic = createCharacteristic(Formats.STRING)
 
-      expect(handlerMock).toHaveBeenCalledTimes(1);
-      expect(listenerCallback).toHaveBeenCalledTimes(0);
-    });
+      const listenerCallback = vi.fn()
+      const handlerMock = vi.fn()
 
-    it("should handle SET event errors gracefully when using onSet handler", async () => {
-      const characteristic = createCharacteristic(Formats.STRING);
+      characteristic.onSet((value) => {
+        handlerMock(value)
+        expect(value).toEqual('NewValue')
+      })
+      characteristic.on(CharacteristicEventTypes.SET, listenerCallback)
+      characteristic.handleSetRequest('NewValue')
 
-      // @ts-expect-error: spying on private property
-      const mock = jest.spyOn(characteristic, "characteristicWarning");
+      expect(handlerMock).toHaveBeenCalledTimes(1)
+      expect(listenerCallback).toHaveBeenCalledTimes(0)
+    })
+
+    it('should handle SET event errors gracefully when using onSet handler', async () => {
+      const characteristic = createCharacteristic(Formats.STRING)
+
+      const mock = vi.spyOn(characteristic, 'characteristicWarning')
 
       // throw HapStatusError - should not trigger characteristic warning
-      mock.mockReset();
+      mock.mockReset()
       characteristic.onSet(() => {
-        throw new HapStatusError(HAPStatus.RESOURCE_BUSY);
-      });
-      await expect(characteristic.handleSetRequest("hello")).rejects.toEqual(HAPStatus.RESOURCE_BUSY);
-      expect(characteristic.statusCode).toEqual(HAPStatus.RESOURCE_BUSY);
-      expect(mock).toHaveBeenCalledTimes(0);
+        throw new HapStatusError(HAPStatus.RESOURCE_BUSY)
+      })
+      await expect(characteristic.handleSetRequest('hello')).rejects.toEqual(HAPStatus.RESOURCE_BUSY)
+      expect(characteristic.statusCode).toEqual(HAPStatus.RESOURCE_BUSY)
+      expect(mock).toHaveBeenCalledTimes(0)
 
       // throw number - should not trigger characteristic warning
-      mock.mockReset();
+      mock.mockReset()
       characteristic.onSet(() => {
-        throw HAPStatus.RESOURCE_BUSY;
-      });
-      await expect(characteristic.handleSetRequest("hello")).rejects.toEqual(HAPStatus.RESOURCE_BUSY);
-      expect(characteristic.statusCode).toEqual(HAPStatus.RESOURCE_BUSY);
-      expect(mock).toHaveBeenCalledTimes(0);
+        throw HAPStatus.RESOURCE_BUSY
+      })
+      await expect(characteristic.handleSetRequest('hello')).rejects.toEqual(HAPStatus.RESOURCE_BUSY)
+      expect(characteristic.statusCode).toEqual(HAPStatus.RESOURCE_BUSY)
+      expect(mock).toHaveBeenCalledTimes(0)
 
       // throw out of range number - should convert status code to SERVICE_COMMUNICATION_FAILURE
-      mock.mockReset();
+      mock.mockReset()
       characteristic.onSet(() => {
-        throw 234234234234;
-      });
-      await expect(characteristic.handleSetRequest("hello")).rejects.toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-      expect(characteristic.statusCode).toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-      expect(mock).toHaveBeenCalledTimes(0);
+        // eslint-disable-next-line no-throw-literal -- a plugin throwing something that is not an Error
+        throw 234234234234
+      })
+      await expect(characteristic.handleSetRequest('hello')).rejects.toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE)
+      expect(characteristic.statusCode).toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE)
+      expect(mock).toHaveBeenCalledTimes(0)
 
       // throw other error - should trigger characteristic warning
-      mock.mockReset();
+      mock.mockReset()
       characteristic.onSet(() => {
-        throw new Error("A Random Error");
-      });
-      await expect(characteristic.handleSetRequest("hello")).rejects.toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-      expect(characteristic.statusCode).toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-      expect(mock).toHaveBeenCalledTimes(1);
-    });
-  });
+        throw new Error('A Random Error')
+      })
+      await expect(characteristic.handleSetRequest('hello')).rejects.toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE)
+      expect(characteristic.statusCode).toEqual(HAPStatus.SERVICE_COMMUNICATION_FAILURE)
+      expect(mock).toHaveBeenCalledTimes(1)
+    })
+  })
 
   describe(`@${CharacteristicEventTypes.CHANGE}`, () => {
+    it('should call listeners for the event when the characteristic is event-only, and the value is set', () => new Promise<void>((callback) => {
+      const characteristic = createCharacteristic(Formats.STRING, Characteristic.ProgrammableSwitchEvent.UUID)
 
-    it("should call listeners for the event when the characteristic is event-only, and the value is set", (callback) => {
-      const characteristic = createCharacteristic(Formats.STRING, Characteristic.ProgrammableSwitchEvent.UUID);
-
-      const VALUE = "NewValue";
-      const listenerCallback = jest.fn();
-      const setValueCallback = jest.fn();
+      const VALUE = 'NewValue'
+      const listenerCallback = vi.fn()
+      const setValueCallback = vi.fn()
 
       characteristic.setValue(VALUE, () => {
-        setValueCallback();
+        setValueCallback()
 
-        characteristic.on(CharacteristicEventTypes.CHANGE, listenerCallback);
+        characteristic.on(CharacteristicEventTypes.CHANGE, listenerCallback)
         characteristic.setValue(VALUE, () => {
-          setValueCallback();
+          setValueCallback()
 
-          expect(listenerCallback).toHaveBeenCalledTimes(1);
-          expect(setValueCallback).toHaveBeenCalledTimes(2);
-          callback();
-        });
-      });
-    });
+          expect(listenerCallback).toHaveBeenCalledTimes(1)
+          expect(setValueCallback).toHaveBeenCalledTimes(2)
+          callback()
+        })
+      })
+    }))
 
-    it("should call any listeners for the event when the characteristic is event-only, and the value is updated", () => {
-      const characteristic = createCharacteristic(Formats.STRING);
+    it('should call any listeners for the event when the characteristic is event-only, and the value is updated', () => {
+      const characteristic = createCharacteristic(Formats.STRING)
       // characteristic.eventOnlyCharacteristic = true;
 
-      const VALUE = "NewValue";
-      const listenerCallback = jest.fn();
-      const updateValueCallback = jest.fn();
+      const VALUE = 'NewValue'
+      const listenerCallback = vi.fn()
+      const updateValueCallback = vi.fn()
 
-      characteristic.on(CharacteristicEventTypes.CHANGE, listenerCallback);
+      characteristic.on(CharacteristicEventTypes.CHANGE, listenerCallback)
       // noinspection JSDeprecatedSymbols
-      characteristic.updateValue(VALUE, updateValueCallback);
+      characteristic.updateValue(VALUE, updateValueCallback)
 
-      expect(listenerCallback).toHaveBeenCalledTimes(1);
-      expect(updateValueCallback).toHaveBeenCalledTimes(1);
-    });
+      expect(listenerCallback).toHaveBeenCalledTimes(1)
+      expect(updateValueCallback).toHaveBeenCalledTimes(1)
+    })
 
-    it("should call the change listener with proper context when supplied as second argument to updateValue", () => {
-      const characteristic = createCharacteristic(Formats.STRING);
+    it('should call the change listener with proper context when supplied as second argument to updateValue', () => {
+      const characteristic = createCharacteristic(Formats.STRING)
 
-      const VALUE = "NewValue";
-      const CONTEXT = "Context";
+      const VALUE = 'NewValue'
+      const CONTEXT = 'Context'
 
-      const listener = jest.fn().mockImplementation((change: CharacteristicChange) => {
-        expect(change.newValue).toEqual(VALUE);
-        expect(change.context).toEqual(CONTEXT);
-      });
+      const listener = vi.fn().mockImplementation((change: CharacteristicChange) => {
+        expect(change.newValue).toEqual(VALUE)
+        expect(change.context).toEqual(CONTEXT)
+      })
 
-      characteristic.on(CharacteristicEventTypes.CHANGE, listener);
-      characteristic.updateValue(VALUE, CONTEXT);
+      characteristic.on(CharacteristicEventTypes.CHANGE, listener)
+      characteristic.updateValue(VALUE, CONTEXT)
 
-      expect(listener).toHaveBeenCalledTimes(1);
-    });
+      expect(listener).toHaveBeenCalledTimes(1)
+    })
 
-    it("should call the change listener with proper context when supplied as second argument to setValue", () => {
-      const characteristic = createCharacteristic(Formats.STRING);
+    it('should call the change listener with proper context when supplied as second argument to setValue', () => {
+      const characteristic = createCharacteristic(Formats.STRING)
 
-      const VALUE = "NewValue";
-      const CONTEXT = "Context";
+      const VALUE = 'NewValue'
+      const CONTEXT = 'Context'
 
-      const listener = jest.fn().mockImplementation((change: CharacteristicChange) => {
-        expect(change.newValue).toEqual(VALUE);
-        expect(change.context).toEqual(CONTEXT);
-      });
+      const listener = vi.fn().mockImplementation((change: CharacteristicChange) => {
+        expect(change.newValue).toEqual(VALUE)
+        expect(change.context).toEqual(CONTEXT)
+      })
 
-      characteristic.on(CharacteristicEventTypes.CHANGE, listener);
-      characteristic.setValue(VALUE, CONTEXT);
+      characteristic.on(CharacteristicEventTypes.CHANGE, listener)
+      characteristic.setValue(VALUE, CONTEXT)
 
-      expect(listener).toHaveBeenCalledTimes(1);
-    });
-  });
+      expect(listener).toHaveBeenCalledTimes(1)
+    })
+  })
 
   describe(`@${CharacteristicEventTypes.SUBSCRIBE}`, () => {
+    it('should call any listeners for the event', () => {
+      const characteristic = createCharacteristic(Formats.STRING)
 
-    it("should call any listeners for the event", () => {
-      const characteristic = createCharacteristic(Formats.STRING);
+      const cb = vi.fn()
 
-      const cb = jest.fn();
+      characteristic.on(CharacteristicEventTypes.SUBSCRIBE, cb)
+      characteristic.subscribe()
 
-      characteristic.on(CharacteristicEventTypes.SUBSCRIBE, cb);
-      characteristic.subscribe();
-
-      expect(cb).toHaveBeenCalledTimes(1);
-    });
-  });
+      expect(cb).toHaveBeenCalledTimes(1)
+    })
+  })
 
   describe(`@${CharacteristicEventTypes.UNSUBSCRIBE}`, () => {
+    it('should call any listeners for the event', () => {
+      const characteristic = createCharacteristic(Formats.STRING)
 
-    it("should call any listeners for the event", () => {
-      const characteristic = createCharacteristic(Formats.STRING);
+      const cb = vi.fn()
 
-      const cb = jest.fn();
+      characteristic.subscribe()
+      characteristic.on(CharacteristicEventTypes.UNSUBSCRIBE, cb)
+      characteristic.unsubscribe()
 
-      characteristic.subscribe();
-      characteristic.on(CharacteristicEventTypes.UNSUBSCRIBE, cb);
-      characteristic.unsubscribe();
+      expect(cb).toHaveBeenCalledTimes(1)
+    })
 
-      expect(cb).toHaveBeenCalledTimes(1);
-    });
+    it('should not call any listeners for the event if none are registered', () => {
+      const characteristic = createCharacteristic(Formats.STRING)
 
-    it("should not call any listeners for the event if none are registered", () => {
-      const characteristic = createCharacteristic(Formats.STRING);
+      const cb = vi.fn()
 
-      const cb = jest.fn();
+      characteristic.on(CharacteristicEventTypes.UNSUBSCRIBE, cb)
+      characteristic.unsubscribe()
 
-      characteristic.on(CharacteristicEventTypes.UNSUBSCRIBE, cb);
-      characteristic.unsubscribe();
+      expect(cb).not.toHaveBeenCalled()
+    })
+  })
 
-      expect(cb).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("#serialize", () => {
-    it("should serialize characteristic", () => {
+  describe('#serialize', () => {
+    it('should serialize characteristic', () => {
       const props: CharacteristicProps = {
         format: Formats.INT,
         perms: [Perms.TIMED_WRITE, Perms.PAIRED_READ],
@@ -2269,54 +2418,58 @@ describe("Characteristic", () => {
         minValue: 123,
         validValueRanges: [123, 1234],
         adminOnlyAccess: [Access.WRITE],
-      };
+      }
 
-      const characteristic = createCharacteristicWithProps(props, Characteristic.ProgrammableSwitchEvent.UUID);
-      characteristic.value = "TestValue";
+      const characteristic = createCharacteristicWithProps(props, Characteristic.ProgrammableSwitchEvent.UUID)
+      characteristic.value = 'TestValue'
 
-      const json = Characteristic.serialize(characteristic);
+      const json = Characteristic.serialize(characteristic)
       expect(json).toEqual({
         displayName: characteristic.displayName,
         UUID: characteristic.UUID,
-        props: props,
-        value: "TestValue",
+        props,
+        value: 'TestValue',
         eventOnlyCharacteristic: true,
-      });
-    });
+      })
+    })
 
-    it("should serialize characteristic with proper constructor name", () => {
-      const characteristic = new Characteristic.Name();
-      characteristic.updateValue("New Name!");
+    it('should serialize characteristic with proper constructor name', () => {
+      const characteristic = new Characteristic.Name()
+      characteristic.updateValue('New Name!')
 
-      const json = Characteristic.serialize(characteristic);
+      const json = Characteristic.serialize(characteristic)
       expect(json).toEqual({
-        displayName: "Name",
-        UUID: "00000023-0000-1000-8000-0026BB765291",
+        displayName: 'Name',
+        UUID: '00000023-0000-1000-8000-0026BB765291',
         eventOnlyCharacteristic: false,
-        constructorName: "Name",
-        value: "New Name!",
-        props: { format: "string", perms: [ "pr" ], maxLen: 64 },
-      });
-    });
-  });
+        constructorName: 'Name',
+        value: 'New Name!',
+        props: {
+          format: 'string',
+          perms: ['pr'],
+          maxLen: 64,
+        },
+      })
+    })
+  })
 
-  describe("#deserialize", () => {
-    it("should deserialize legacy json from homebridge", () => {
-      const json = JSON.parse("{\"displayName\": \"On\", \"UUID\": \"00000025-0000-1000-8000-0026BB765291\", " +
-          "\"props\": {\"format\": \"int\", \"unit\": \"seconds\", \"minValue\": 4, \"maxValue\": 6, \"minStep\": 0.1, \"perms\": [\"pr\", \"pw\", \"ev\"]}, " +
-          "\"value\": false, \"eventOnlyCharacteristic\": false}");
-      const characteristic = Characteristic.deserialize(json);
+  describe('#deserialize', () => {
+    it('should deserialize legacy json from homebridge', () => {
+      const json = JSON.parse('{"displayName": "On", "UUID": "00000025-0000-1000-8000-0026BB765291", '
+        + '"props": {"format": "int", "unit": "seconds", "minValue": 4, "maxValue": 6, "minStep": 0.1, "perms": ["pr", "pw", "ev"]}, '
+        + '"value": false, "eventOnlyCharacteristic": false}')
+      const characteristic = Characteristic.deserialize(json)
 
-      expect(characteristic.displayName).toEqual(json.displayName);
-      expect(characteristic.UUID).toEqual(json.UUID);
-      expect(characteristic.props).toEqual(json.props);
-      expect(characteristic.value).toEqual(json.value);
-    });
+      expect(characteristic.displayName).toEqual(json.displayName)
+      expect(characteristic.UUID).toEqual(json.UUID)
+      expect(characteristic.props).toEqual(json.props)
+      expect(characteristic.value).toEqual(json.value)
+    })
 
-    it("should deserialize complete json", () => {
+    it('should deserialize complete json', () => {
       const json: SerializedCharacteristic = {
-        displayName: "MyName",
-        UUID: "00000001-0000-1000-8000-0026BB765291",
+        displayName: 'MyName',
+        UUID: '00000001-0000-1000-8000-0026BB765291',
         props: {
           format: Formats.INT,
           perms: [Perms.TIMED_WRITE, Perms.PAIRED_READ],
@@ -2326,117 +2479,119 @@ describe("Characteristic", () => {
           validValueRanges: [123, 1234],
           adminOnlyAccess: [Access.NOTIFY, Access.READ],
         },
-        value: "testValue",
+        value: 'testValue',
         eventOnlyCharacteristic: false,
-      };
+      }
 
-      const characteristic = Characteristic.deserialize(json);
+      const characteristic = Characteristic.deserialize(json)
 
-      expect(characteristic.displayName).toEqual(json.displayName);
-      expect(characteristic.UUID).toEqual(json.UUID);
-      expect(characteristic.props).toEqual(json.props);
-      expect(characteristic.value).toEqual(json.value);
-    });
+      expect(characteristic.displayName).toEqual(json.displayName)
+      expect(characteristic.UUID).toEqual(json.UUID)
+      expect(characteristic.props).toEqual(json.props)
+      expect(characteristic.value).toEqual(json.value)
+    })
 
-    it("should deserialize from json with constructor name", () => {
+    it('should deserialize from json with constructor name', () => {
       const json: SerializedCharacteristic = {
-        displayName: "Name",
-        UUID: "00000023-0000-1000-8000-0026BB765291",
+        displayName: 'Name',
+        UUID: '00000023-0000-1000-8000-0026BB765291',
         eventOnlyCharacteristic: false,
-        constructorName: "Name",
-        value: "New Name!",
-        props: { format: "string", perms: [ Perms.PAIRED_READ ], maxLen: 64 },
-      };
+        constructorName: 'Name',
+        value: 'New Name!',
+        props: {
+          format: 'string',
+          perms: [Perms.PAIRED_READ],
+          maxLen: 64,
+        },
+      }
 
-      const characteristic = Characteristic.deserialize(json);
+      const characteristic = Characteristic.deserialize(json)
 
-      expect(characteristic instanceof Characteristic.Name).toBeTruthy();
-    });
+      expect(characteristic instanceof Characteristic.Name).toBeTruthy()
+    })
 
-    it("should deserialize json carrying malformed permissions, on either branch", () => {
-      const consoleWarnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
-      const perms = [null, Perms.NOTIFY] as unknown as Perms[];
+    it('should deserialize json carrying malformed permissions, on either branch', () => {
+      const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const perms = [null, Perms.NOTIFY] as unknown as Perms[]
       const json: SerializedCharacteristic = {
-        displayName: "Name",
-        UUID: "00000023-0000-1000-8000-0026BB765291",
+        displayName: 'Name',
+        UUID: '00000023-0000-1000-8000-0026BB765291',
         eventOnlyCharacteristic: false,
-        value: "New Name!",
-        props: { format: Formats.STRING, perms: perms, maxLen: 64 },
-      };
+        value: 'New Name!',
+        props: { format: Formats.STRING, perms, maxLen: 64 },
+      }
 
       // A restore reaches setProps whether or not the cached json names a constructor, so both routes out of a poisoned cache have to survive it.
-      expect(Characteristic.deserialize(json).props.perms).toEqual(perms);
-      expect(Characteristic.deserialize({ ...json, constructorName: "Name" }).props.perms).toEqual(perms);
+      expect(Characteristic.deserialize(json).props.perms).toEqual(perms)
+      expect(Characteristic.deserialize({ ...json, constructorName: 'Name' }).props.perms).toEqual(perms)
 
-      consoleWarnSpy.mockRestore();
-    });
+      consoleWarnSpy.mockRestore()
+    })
+  })
 
-  });
-
-  describe("undefined string in characteristic error warnings (fix fe8c1b3a)", () => {
-    test("setValue should emit \"Unknown error\" when validateUserInput throws an object without a message", () => {
-      const characteristic = createCharacteristic(Formats.STRING);
+  describe('undefined string in characteristic error warnings (fix fe8c1b3a)', () => {
+    it('setValue should emit "Unknown error" when validateUserInput throws an object without a message', () => {
+      const characteristic = createCharacteristic(Formats.STRING)
 
       // throw a non-Error (no `message` property) — without the fix this
       // produced `error?.message + ""` === "undefined" in the warning text
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      jest.spyOn(characteristic as any, "validateUserInput").mockImplementation(() => {
-        throw {};
-      });
 
-      const warnings: { type: CharacteristicWarningType; message: string }[] = [];
+      vi.spyOn(characteristic as any, 'validateUserInput').mockImplementation(() => {
+        // eslint-disable-next-line no-throw-literal -- a plugin throwing something that is not an Error
+        throw {}
+      })
+
+      const warnings: { type: CharacteristicWarningType, message: string }[] = []
       characteristic.on(CharacteristicEventTypes.CHARACTERISTIC_WARNING, (type, message) => {
-        warnings.push({ type, message });
-      });
+        warnings.push({ type, message })
+      })
 
-      characteristic.setValue("anything");
+      characteristic.setValue('anything')
 
-      const errorWarnings = warnings.filter(w => w.type === CharacteristicWarningType.ERROR_MESSAGE);
-      expect(errorWarnings.length).toBe(1);
-      expect(errorWarnings[0].message).toBe("Unknown error");
-      expect(errorWarnings[0].message).not.toBe("undefined");
-    });
+      const errorWarnings = warnings.filter(w => w.type === CharacteristicWarningType.ERROR_MESSAGE)
+      expect(errorWarnings.length).toBe(1)
+      expect(errorWarnings[0].message).toBe('Unknown error')
+      expect(errorWarnings[0].message).not.toBe('undefined')
+    })
 
-    test("setValue should preserve a real Error message when validateUserInput throws an Error", () => {
-      const characteristic = createCharacteristic(Formats.STRING);
+    it('setValue should preserve a real Error message when validateUserInput throws an Error', () => {
+      const characteristic = createCharacteristic(Formats.STRING)
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      jest.spyOn(characteristic as any, "validateUserInput").mockImplementation(() => {
-        throw new Error("validation failed: bad value");
-      });
+      vi.spyOn(characteristic as any, 'validateUserInput').mockImplementation(() => {
+        throw new Error('validation failed: bad value')
+      })
 
-      const warnings: { type: CharacteristicWarningType; message: string }[] = [];
+      const warnings: { type: CharacteristicWarningType, message: string }[] = []
       characteristic.on(CharacteristicEventTypes.CHARACTERISTIC_WARNING, (type, message) => {
-        warnings.push({ type, message });
-      });
+        warnings.push({ type, message })
+      })
 
-      characteristic.setValue("anything");
+      characteristic.setValue('anything')
 
-      const errorWarnings = warnings.filter(w => w.type === CharacteristicWarningType.ERROR_MESSAGE);
-      expect(errorWarnings.length).toBe(1);
-      expect(errorWarnings[0].message).toBe("validation failed: bad value");
-    });
+      const errorWarnings = warnings.filter(w => w.type === CharacteristicWarningType.ERROR_MESSAGE)
+      expect(errorWarnings.length).toBe(1)
+      expect(errorWarnings[0].message).toBe('validation failed: bad value')
+    })
 
-    test("updateValue should emit \"Unknown error\" when validateUserInput throws an object without a message", () => {
-      const characteristic = createCharacteristic(Formats.STRING);
+    it('updateValue should emit "Unknown error" when validateUserInput throws an object without a message', () => {
+      const characteristic = createCharacteristic(Formats.STRING)
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      jest.spyOn(characteristic as any, "validateUserInput").mockImplementation(() => {
-        throw {};
-      });
+      vi.spyOn(characteristic as any, 'validateUserInput').mockImplementation(() => {
+        // eslint-disable-next-line no-throw-literal -- a plugin throwing something that is not an Error
+        throw {}
+      })
 
-      const warnings: { type: CharacteristicWarningType; message: string }[] = [];
+      const warnings: { type: CharacteristicWarningType, message: string }[] = []
       characteristic.on(CharacteristicEventTypes.CHARACTERISTIC_WARNING, (type, message) => {
-        warnings.push({ type, message });
-      });
+        warnings.push({ type, message })
+      })
 
-      characteristic.updateValue("anything");
+      characteristic.updateValue('anything')
 
-      const errorWarnings = warnings.filter(w => w.type === CharacteristicWarningType.ERROR_MESSAGE);
-      expect(errorWarnings.length).toBe(1);
-      expect(errorWarnings[0].message).toBe("Unknown error");
-      expect(errorWarnings[0].message).not.toBe("undefined");
-    });
-  });
-
-});
+      const errorWarnings = warnings.filter(w => w.type === CharacteristicWarningType.ERROR_MESSAGE)
+      expect(errorWarnings.length).toBe(1)
+      expect(errorWarnings[0].message).toBe('Unknown error')
+      expect(errorWarnings[0].message).not.toBe('undefined')
+    })
+  })
+})
